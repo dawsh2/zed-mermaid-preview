@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use base64::engine::{general_purpose::STANDARD, Engine as _};
 use lsp_server::{Connection, Message, Request, Response, ResponseError};
 use lsp_types::*;
 use serde_json::json;
@@ -307,8 +306,19 @@ fn locate_mermaid_source_block(
     let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
     let (start_line, end_line) = find_mermaid_fence(&lines, cursor_line)?;
 
-    if start_line > 0 && lines[start_line - 1].contains("<!-- mermaid-source") {
-        return None;
+    if start_line > 0 {
+        let mut i = start_line;
+        while i > 0 {
+            i -= 1;
+            let trimmed = lines[i].trim_start();
+            if trimmed.is_empty() || trimmed.starts_with("<summary") {
+                continue;
+            }
+            if trimmed.starts_with("<details") && trimmed.contains("mermaid-source") {
+                return None;
+            }
+            break;
+        }
     }
 
     let code = lines[start_line + 1..end_line].join("\n");
@@ -347,34 +357,50 @@ fn locate_rendered_mermaid_block(
     }
 
     let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
-    let comment_line = (0..=cursor_line)
-        .rev()
-        .find(|&i| lines[i].contains("<!-- mermaid-source:"))?;
+    let details_start = (0..=cursor_line).rev().find(|&i| {
+        let trimmed = lines[i].trim_start();
+        trimmed.starts_with("<details") && trimmed.contains("mermaid-source")
+    })?;
 
-    let encoded_line = lines[comment_line].trim();
-    let encoded = encoded_line.strip_prefix("<!-- mermaid-source:")?.trim();
-    let encoded = encoded.strip_suffix("-->")?.trim();
-    let decoded = STANDARD.decode(encoded).ok()?;
-    let code = String::from_utf8(decoded).ok()?;
+    let mut line = details_start + 1;
+    if line < lines.len() && lines[line].trim_start().starts_with("<summary") {
+        line += 1;
+    }
 
-    let mut end_line = comment_line + 1;
+    while line < lines.len() && lines[line].trim().is_empty() {
+        line += 1;
+    }
+
+    if line >= lines.len() || !lines[line].trim_start().starts_with("```mermaid") {
+        return None;
+    }
+
+    let code_start = line;
+    let code_end = (code_start + 1..lines.len()).find(|&i| {
+        lines[i].trim_start().starts_with("```") && !lines[i].trim_start().starts_with("```mermaid")
+    })?;
+
+    let code = lines[code_start + 1..code_end].join("\n");
+
+    let details_end =
+        (code_end..lines.len()).find(|&i| lines[i].trim_start().starts_with("</details"))?;
+
+    let mut end_line = details_end + 1;
     let mut end_character = 0;
 
     if let Some(img_line) =
-        (comment_line + 1..lines.len()).find(|&i| lines[i].contains("![Mermaid Diagram]("))
+        (details_end + 1..lines.len()).find(|&i| lines[i].contains("![Mermaid Diagram]("))
     {
-        let mut after_line = img_line + 1;
-        while after_line < lines.len() && lines[after_line].trim().is_empty() {
-            after_line += 1;
+        end_line = img_line + 1;
+        while end_line < lines.len() && lines[end_line].trim().is_empty() {
+            end_line += 1;
         }
-        end_line = after_line;
-        end_character = 0;
     }
 
     Some(RenderedMermaidBlock {
         code,
         start: Position {
-            line: comment_line as u32,
+            line: details_start as u32,
             character: 0,
         },
         end: Position {
@@ -448,16 +474,17 @@ fn create_render_edits(
         .to_string_lossy()
         .to_string();
 
-    let encoded = STANDARD.encode(block.code.as_bytes());
-    let comment = format!("<!-- mermaid-source:{} -->", encoded);
-
     let mut new_text = match block.kind {
-        DocumentKind::Markdown => {
-            format!("{}\n\n![Mermaid Diagram]({})\n", comment, absolute_svg_path)
-        }
-        DocumentKind::Mermaid => {
-            format!("{}\n\n![Mermaid Diagram]({})\n", comment, absolute_svg_path)
-        }
+        DocumentKind::Markdown => format!(
+            "<details class=\"mermaid-source\">\n<summary>Mermaid Source</summary>\n\n```mermaid\n{}\n```\n</details>\n\n![Mermaid Diagram]({})\n",
+            block.code.trim_end(),
+            absolute_svg_path
+        ),
+        DocumentKind::Mermaid => format!(
+            "<details class=\"mermaid-source\">\n<summary>Mermaid Source</summary>\n\n```mermaid\n{}\n```\n</details>\n\n![Mermaid Diagram]({})\n",
+            block.code.trim_end(),
+            absolute_svg_path
+        ),
     };
 
     if !new_text.ends_with('\n') {
@@ -483,14 +510,11 @@ fn create_source_edits(
     uri: &str,
     block: &RenderedMermaidBlock,
 ) -> Result<HashMap<Url, Vec<TextEdit>>> {
-    let mut code = block.code.clone();
-    if !code.ends_with('\n') {
-        code.push('\n');
-    }
+    let trimmed_code = block.code.trim_end();
 
     let new_text = match block.kind {
-        DocumentKind::Markdown => format!("```mermaid\n{}```\n", code),
-        DocumentKind::Mermaid => code,
+        DocumentKind::Markdown => format!("```mermaid\n{}\n```\n", trimmed_code),
+        DocumentKind::Mermaid => format!("{}\n", trimmed_code),
     };
 
     let mut changes = HashMap::new();
