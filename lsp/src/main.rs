@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use base64::engine::{general_purpose::STANDARD, Engine as _};
 use lsp_server::{Connection, Message, Request, Response, ResponseError};
 use lsp_types::*;
 use serde_json::json;
@@ -346,64 +347,46 @@ fn locate_rendered_mermaid_block(
     }
 
     let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
-    let comment_start = (0..=cursor_line)
+    let comment_line = (0..=cursor_line)
         .rev()
-        .find(|&i| lines[i].contains("<!-- mermaid-source"))?;
+        .find(|&i| lines[i].contains("<!-- mermaid-source:"))?;
 
-    let comment_end = (comment_start..lines.len()).find(|&i| lines[i].contains("-->"))?;
+    let encoded_line = lines[comment_line].trim();
+    let encoded = encoded_line.strip_prefix("<!-- mermaid-source:")?.trim();
+    let encoded = encoded.strip_suffix("-->")?.trim();
+    let decoded = STANDARD.decode(encoded).ok()?;
+    let code = String::from_utf8(decoded).ok()?;
 
-    let mut code_lines = Vec::new();
-    let mut inside_code = false;
+    let mut end_line = comment_line;
+    let mut end_character = lines[comment_line].len();
 
-    for line in lines
-        .iter()
-        .skip(comment_start + 1)
-        .take(comment_end.saturating_sub(comment_start + 1))
+    if let Some(img_line) =
+        (comment_line + 1..lines.len()).find(|&i| lines[i].contains("![Mermaid Diagram]("))
     {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```") {
-            if inside_code {
-                inside_code = false;
-            } else if trimmed.starts_with("```mermaid") {
-                inside_code = true;
-            }
-            continue;
+        end_line = img_line;
+        end_character = lines[img_line].len();
+
+        let mut after_line = img_line + 1;
+        while after_line < lines.len() && lines[after_line].trim().is_empty() {
+            after_line += 1;
         }
-
-        if inside_code {
-            code_lines.push(*line);
-        }
-    }
-
-    if code_lines.is_empty() {
-        return None;
-    }
-
-    let code = code_lines.join("\n");
-
-    let image_line =
-        (comment_end + 1..lines.len()).find(|&i| lines[i].contains("![Mermaid Diagram]("));
-
-    let end_line = image_line.unwrap_or(comment_end);
-    let end_position = if end_line + 1 < lines.len() {
-        Position {
-            line: (end_line + 1) as u32,
-            character: 0,
-        }
+        end_line = after_line;
+        end_character = 0;
     } else {
-        Position {
-            line: end_line as u32,
-            character: lines[end_line].len() as u32,
-        }
-    };
+        end_line = comment_line + 1;
+        end_character = 0;
+    }
 
     Some(RenderedMermaidBlock {
         code,
         start: Position {
-            line: comment_start as u32,
+            line: comment_line as u32,
             character: 0,
         },
-        end: end_position,
+        end: Position {
+            line: end_line.min(lines.len()) as u32,
+            character: end_character as u32,
+        },
         kind: if is_mermaid_document(uri) {
             DocumentKind::Mermaid
         } else {
@@ -471,17 +454,16 @@ fn create_render_edits(
         .to_string_lossy()
         .to_string();
 
+    let encoded = STANDARD.encode(block.code.as_bytes());
+    let comment = format!("<!-- mermaid-source:{} -->", encoded);
+
     let mut new_text = match block.kind {
-        DocumentKind::Markdown => format!(
-            "<!-- mermaid-source\n```mermaid\n{}\n```\n-->\n\n![Mermaid Diagram]({})\n",
-            block.code.trim_end(),
-            absolute_svg_path
-        ),
-        DocumentKind::Mermaid => format!(
-            "<!-- mermaid-source\n{}\n-->\n\n![Mermaid Diagram]({})\n",
-            block.code.trim_end(),
-            absolute_svg_path
-        ),
+        DocumentKind::Markdown => {
+            format!("{}\n\n![Mermaid Diagram]({})\n", comment, absolute_svg_path)
+        }
+        DocumentKind::Mermaid => {
+            format!("{}\n\n![Mermaid Diagram]({})\n", comment, absolute_svg_path)
+        }
     };
 
     if !new_text.ends_with('\n') {
