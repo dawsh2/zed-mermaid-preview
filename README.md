@@ -146,7 +146,7 @@ The WASM extension now downloads the native `mermaid-lsp` binary on demand from 
 
 - When the language server starts, it checks for a cached binary that matches the current platform (macOS, Linux, Windows across `aarch64`, `x86_64`, and `x86`).
 - If the binary is missing, the extension downloads `mermaid-lsp-<target>.zip` from the newest release of `dawsh2/zed-mermaid-preview`, unpacks it into `mermaid-lsp-cache/<version>/`, marks it executable, and launches it.
-- Asset names follow the Rust triple for each target (for example `mermaid-lsp-apple-darwin-aarch64.zip`, `mermaid-lsp-unknown-linux-gnu-x86_64.zip`, `mermaid-lsp-pc-windows-msvc-x86.zip`). Ensure each archive contains the compiled binary at the root.
+- Asset names follow the Rust target triple (for example `mermaid-lsp-aarch64-apple-darwin.zip`, `mermaid-lsp-x86_64-unknown-linux-gnu.zip`, `mermaid-lsp-x86_64-pc-windows-msvc.zip`). Ensure each archive contains the compiled binary at the root.
 
 The Mermaid language definition now reuses Zed's built-in Markdown grammar directly, so installs no longer need to fetch or compile `tree-sitter-markdown`. That keeps dev rebuilds fast and removes the long "compiling markdown parser" step.
 

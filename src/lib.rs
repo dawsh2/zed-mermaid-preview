@@ -242,7 +242,7 @@ impl MermaidPreviewExtension {
             Os::Windows => "pc-windows-msvc",
         };
 
-        let expected_name = format!("mermaid-lsp-{os}-{arch}.zip", os = os_str, arch = arch_str);
+        let expected_name = format!("mermaid-lsp-{arch}-{os}.zip", os = os_str, arch = arch_str);
 
         let assets = &release.assets;
 
