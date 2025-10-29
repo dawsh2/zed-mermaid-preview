@@ -148,6 +148,8 @@ The WASM extension now downloads the native `mermaid-lsp` binary on demand from 
 - If the binary is missing, the extension downloads `mermaid-lsp-<target>.zip` from the newest release of `daws/mermaid-preview`, unpacks it into `mermaid-lsp-cache/<version>/`, marks it executable, and launches it.
 - Asset names follow the Rust triple for each target (for example `mermaid-lsp-apple-darwin-aarch64.zip`, `mermaid-lsp-unknown-linux-gnu-x86_64.zip`, `mermaid-lsp-pc-windows-msvc-x86.zip`). Ensure each archive contains the compiled binary at the root.
 
+The Mermaid language definition now reuses Zed's built-in Markdown grammar directly, so installs no longer need to fetch or compile `tree-sitter-markdown`. That keeps dev rebuilds fast and removes the long "compiling markdown parser" step.
+
 Developers can still run `./build.sh` locally when iterating—it produces the wasm artifact and a fresh `mermaid-lsp` binary for testing or for creating release assets. Setting `MERMAID_LSP_PATH` (or having `mermaid-lsp` on `PATH`) continues to override the download flow, which is handy for local builds.
 
 #### Cutting a release
@@ -156,6 +158,8 @@ Developers can still run `./build.sh` locally when iterating—it produces the w
 2. The `Build mermaid-lsp binaries` workflow runs for macOS (arm64 and x86_64), Linux (x86_64), and Windows (x86_64) targets.
 3. Each job invokes `scripts/package-mermaid-lsp.sh <target>` to compile `mermaid-lsp`, zip the binary as `mermaid-lsp-<target>.zip`, and upload it as a build artifact.
 4. When the release is published, the workflow automatically attaches those zip files to the GitHub Release so the extension can download them on demand.
+
+No extra steps are required for the Markdown grammar; it's bundled with Zed itself and is reused directly.
 
 You can also trigger the workflow manually via the **Run workflow** button to produce fresh artifacts without publishing a release.
 

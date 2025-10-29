@@ -17,7 +17,3 @@ languages = ["Markdown", "Mermaid"]
 [language_servers.mermaid.language_ids]
 "Markdown" = "markdown"
 "Mermaid" = "mermaid"
-
-[grammars.markdown]
-repository = "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
-rev = "be3e08acfd85bd87d85f41fde74fdcec25f76dbe"
