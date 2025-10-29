@@ -357,23 +357,17 @@ fn locate_rendered_mermaid_block(
     let decoded = STANDARD.decode(encoded).ok()?;
     let code = String::from_utf8(decoded).ok()?;
 
-    let mut end_line = comment_line;
-    let mut end_character = lines[comment_line].len();
+    let mut end_line = comment_line + 1;
+    let mut end_character = 0;
 
     if let Some(img_line) =
         (comment_line + 1..lines.len()).find(|&i| lines[i].contains("![Mermaid Diagram]("))
     {
-        end_line = img_line;
-        end_character = lines[img_line].len();
-
         let mut after_line = img_line + 1;
         while after_line < lines.len() && lines[after_line].trim().is_empty() {
             after_line += 1;
         }
         end_line = after_line;
-        end_character = 0;
-    } else {
-        end_line = comment_line + 1;
         end_character = 0;
     }
 
