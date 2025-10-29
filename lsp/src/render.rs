@@ -18,6 +18,11 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
 
     let cli_path = mermaid_cli_path()?;
 
+    // Ensure Mermaid uses SVG labels so that text renders without foreignObject nodes.
+    let config_path = temp_dir.join(format!("mermaid_config_{}.json", std::process::id()));
+    fs::write(&config_path, r#"{"flowchart":{"htmlLabels":false}}"#)
+        .map_err(|e| anyhow!("Failed to write mermaid config file: {}", e))?;
+
     // Render using mmdc
     let output = Command::new(&cli_path)
         .arg("-i")
@@ -29,11 +34,14 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
         .arg("1200") // default width
         .arg("-H")
         .arg("800") // default height
+        .arg("-c")
+        .arg(&config_path)
         .output()
         .map_err(|e| anyhow!("Failed to execute mmdc: {}", e))?;
 
     // Clean up temp file
     let _ = fs::remove_file(&temp_path);
+    let _ = fs::remove_file(&config_path);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
