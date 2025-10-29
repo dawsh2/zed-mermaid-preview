@@ -386,7 +386,6 @@ fn locate_rendered_mermaid_block(
         (code_end..lines.len()).find(|&i| lines[i].trim_start().starts_with("</details"))?;
 
     let mut end_line = details_end + 1;
-    let mut end_character = 0;
 
     if let Some(img_line) =
         (details_end + 1..lines.len()).find(|&i| lines[i].contains("![Mermaid Diagram]("))
@@ -405,7 +404,7 @@ fn locate_rendered_mermaid_block(
         },
         end: Position {
             line: end_line.min(lines.len()) as u32,
-            character: end_character as u32,
+            character: 0,
         },
         kind: if is_mermaid_document(uri) {
             DocumentKind::Mermaid
