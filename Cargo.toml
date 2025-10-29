@@ -1,0 +1,14 @@
+[workspace]
+members = ["lsp"]
+
+[package]
+name = "mermaid_preview"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = { path = "../../crates/extension_api" }
+dirs = "5"

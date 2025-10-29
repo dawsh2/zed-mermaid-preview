@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["extension", "lsp"]
+
+[profile.release]
+opt-level = "s"
+lto = true
