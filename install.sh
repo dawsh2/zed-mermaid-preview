@@ -2,56 +2,51 @@
 
 # Installation script for Mermaid Preview extension
 
-set -e
+set -euo pipefail
 
-# Get the directory where this script is located
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-EXTENSION_DIR="$HOME/.config/zed/extensions/mermaid-preview"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXTENSIONS_ROOT="${ZED_EXTENSIONS_DIR:-$HOME/.config/zed/extensions}"
+TARGET_DIR="${EXTENSIONS_ROOT}/mermaid-preview"
 
 echo "Installing Mermaid Preview extension for Zed..."
 echo "Source: $SCRIPT_DIR"
-echo "Target: $EXTENSION_DIR"
+echo "Target: $TARGET_DIR"
 
-# Check if mmdc is installed
-if ! command -v mmdc &> /dev/null; then
-    echo ""
-    echo "⚠️  Warning: Mermaid CLI (mmdc) not found in PATH"
-    echo "   Please install it with: npm install -g @mermaid-js/mermaid-cli"
-    echo ""
-    read -p "Continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+mkdir -p "$EXTENSIONS_ROOT"
+
+if [[ -n "${MERMAID_CLI_PATH:-}" ]]; then
+    if [[ ! -x "${MERMAID_CLI_PATH}" ]]; then
+        echo "MERMAID_CLI_PATH is set to '${MERMAID_CLI_PATH}', but it is not executable." >&2
         exit 1
+    fi
+else
+    if ! command -v mmdc >/dev/null 2>&1; then
+        echo "⚠️  Warning: Mermaid CLI (mmdc) not found in PATH. Install it with 'npm install -g @mermaid-js/mermaid-cli' to enable diagram rendering." >&2
     fi
 fi
 
-# Create the extension directory if it doesn't exist
-mkdir -p "$EXTENSION_DIR"
-
-# Copy all necessary files
 echo "Copying extension files..."
-cp -r "$SCRIPT_DIR"/* "$EXTENSION_DIR/"
+rsync -a --delete \
+    --exclude '.git/' \
+    --exclude 'target/' \
+    --exclude 'install.sh' \
+    --exclude 'build.sh' \
+    "$SCRIPT_DIR/" "$TARGET_DIR/"
 
-# Remove the install scripts from the installed extension
-rm -f "$EXTENSION_DIR/install.sh" "$EXTENSION_DIR/build.sh"
+pushd "$TARGET_DIR" >/dev/null
 
-# Build the extension
-echo "Building extension..."
-cd "$EXTENSION_DIR"
+rustup target add wasm32-wasip2 >/dev/null 2>&1 || true
+
+echo "Building extension binaries..."
 cargo build --lib --target wasm32-wasip2 --release
-cd lsp
-cargo build --release
-cd ..
+cargo build --package mermaid-lsp --release
 
-# Copy binaries to root
 cp target/wasm32-wasip2/release/mermaid_preview.wasm ./extension.wasm
-cp lsp/target/release/mermaid-lsp ./
+cp target/release/mermaid-lsp ./
 
-echo ""
+popd >/dev/null
+
+echo
 echo "✅ Installation complete!"
-echo ""
+echo
 echo "Restart Zed to start using the extension."
-echo ""
-echo "Usage:"
-echo "1. Create a mermaid code block in markdown"
-echo "2. Right-click and select 'Render Mermaid Diagram'"

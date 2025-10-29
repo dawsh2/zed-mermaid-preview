@@ -2,10 +2,12 @@ use anyhow::{anyhow, Result};
 use lsp_server::{Connection, Message, Request, Response, ResponseError};
 use lsp_types::*;
 use serde_json::json;
-use std::collections::HashMap;
+use std::{collections::HashMap, fs};
 use url::Url;
 
 mod render;
+
+use crate::render::render_mermaid;
 
 fn main() -> Result<()> {
     // Log to stderr for debugging
@@ -197,7 +199,8 @@ fn get_code_actions(
     let range = params.range;
 
     // Get document content
-    let content = documents.get(&uri)
+    let content = documents
+        .get(&uri)
         .ok_or_else(|| anyhow::anyhow!("Document not found: {}", uri))?;
 
     // Check if the selected range contains Mermaid code
@@ -249,7 +252,11 @@ fn is_mermaid_selection(content: &str, range: &Range) -> bool {
     let end_line = range.end.line as usize;
 
     // Check if selection is within a Mermaid code block or contains Mermaid syntax
-    for line in lines.iter().skip(start_line).take(end_line - start_line + 1) {
+    for line in lines
+        .iter()
+        .skip(start_line)
+        .take(end_line - start_line + 1)
+    {
         // Check for fenced code block
         if line.trim().starts_with("```mermaid") {
             return true;
@@ -257,11 +264,31 @@ fn is_mermaid_selection(content: &str, range: &Range) -> bool {
 
         // Check for common Mermaid diagram types
         let mermaid_patterns = [
-            "graph TD", "graph LR", "graph TB", "graph BT", "graph RL",
-            "flowchart TD", "flowchart LR", "flowchart TB", "flowchart BT", "flowchart RL",
-            "sequenceDiagram", "classDiagram", "stateDiagram", "stateDiagram-v2",
-            "gantt", "pie", "journey", "gitgraph", "C4Context", "mindmap",
-            "timeline", "sankey", "block", "architecture", "erDiagram"
+            "graph TD",
+            "graph LR",
+            "graph TB",
+            "graph BT",
+            "graph RL",
+            "flowchart TD",
+            "flowchart LR",
+            "flowchart TB",
+            "flowchart BT",
+            "flowchart RL",
+            "sequenceDiagram",
+            "classDiagram",
+            "stateDiagram",
+            "stateDiagram-v2",
+            "gantt",
+            "pie",
+            "journey",
+            "gitgraph",
+            "C4Context",
+            "mindmap",
+            "timeline",
+            "sankey",
+            "block",
+            "architecture",
+            "erDiagram",
         ];
 
         for pattern in &mermaid_patterns {
@@ -280,10 +307,15 @@ fn is_rendered_mermaid(content: &str, range: &Range) -> bool {
     let end_line = range.end.line as usize;
 
     // Check if selection contains our rendered content
-    for line in lines.iter().skip(start_line).take(end_line - start_line + 1) {
-        if line.contains("<!-- mermaid-source") ||
-           line.contains("![Mermaid Diagram](") ||
-           line.contains("<svg") {
+    for line in lines
+        .iter()
+        .skip(start_line)
+        .take(end_line - start_line + 1)
+    {
+        if line.contains("<!-- mermaid-source")
+            || line.contains("![Mermaid Diagram](")
+            || line.contains("<svg")
+        {
             return true;
         }
     }
@@ -301,7 +333,10 @@ fn create_workspace_edits(
     let end_line = range.end.line as usize;
 
     // Check if this is a fenced code block in Markdown or a whole .mmd file
-    let (mermaid_code, start_pos, end_pos) = if lines.iter().any(|line| line.trim_start().starts_with("```mermaid")) {
+    let (mermaid_code, start_pos, end_pos) = if lines
+        .iter()
+        .any(|line| line.trim_start().starts_with("```mermaid"))
+    {
         // This is a fenced code block - find the boundaries
         let block_start = (0..=start_line)
             .rev()
@@ -345,12 +380,9 @@ fn create_workspace_edits(
         (code, start_pos, end_pos)
     };
 
-    // Convert to SVG for inline viewing
-    use std::fs;
-    use std::process::Command;
-
     let url = Url::parse(uri)?;
-    let path = url.to_file_path()
+    let path = url
+        .to_file_path()
         .map_err(|_| anyhow::anyhow!("Invalid file path"))?;
 
     // Generate SVG filename based on the original file
@@ -362,45 +394,30 @@ fn create_workspace_edits(
         None => "diagram.svg".to_string(),
     };
 
-    let svg_path = path.parent()
-        .unwrap_or_else(|| &path)
-        .join(&svg_filename);
-    let svg_path_str = svg_path.to_string_lossy();
+    let svg_path = path.parent().unwrap_or_else(|| &path).join(&svg_filename);
+    let svg_contents = render_mermaid(&mermaid_code)?;
 
-    // Convert to SVG using mmdc
-    let svg_output = Command::new("mmdc")
-        .arg("-i") // input from stdin
-        .arg("-")
-        .arg("-o") // output file
-        .arg(&svg_path)
-        .arg("-t") // transparent background
-        .stdin(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| anyhow!("Failed to start mmdc: {}", e))?;
-
-    // Write mermaid code to stdin
-    {
-        use std::io::Write;
-        let stdin = svg_output.stdin.as_mut().unwrap();
-        stdin.write_all(mermaid_code.as_bytes())
-            .map_err(|e| anyhow!("Failed to write to mmdc stdin: {}", e))?;
+    if let Some(parent) = svg_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)
+                .map_err(|e| anyhow!("Failed to create output directory: {}", e))?;
+        }
     }
 
-    // Wait for completion
-    let output = svg_output.wait_with_output()
-        .map_err(|e| anyhow!("Failed to get mmdc output: {}", e))?;
+    fs::write(&svg_path, svg_contents.as_bytes())
+        .map_err(|e| anyhow!("Failed to write SVG: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = output.stderr;
-        return Err(anyhow!("SVG conversion failed: {}", String::from_utf8_lossy(&stderr)));
-    }
-
-    // Create absolute path for img tag to ensure Zed can find it
-    let absolute_svg_path = svg_path_str.to_string();
+    let absolute_svg_path = svg_path
+        .canonicalize()
+        .unwrap_or(svg_path.clone())
+        .to_string_lossy()
+        .to_string();
 
     // Create output with Markdown image reference
-    let output = if lines.iter().any(|line| line.trim_start().starts_with("```mermaid")) {
+    let output = if lines
+        .iter()
+        .any(|line| line.trim_start().starts_with("```mermaid"))
+    {
         // Markdown file - replace code block with image
         format!(
             "![Mermaid Diagram]({})\n\n<!-- mermaid-source\n``mermaid\n{}\n``\n-->",
@@ -457,7 +474,11 @@ fn create_source_edits(
     let mut mermaid_code = String::new();
     let mut in_code_block = false;
 
-    for line in lines.iter().skip(source_start + 1).take(source_end - source_start - 1) {
+    for line in lines
+        .iter()
+        .skip(source_start + 1)
+        .take(source_end - source_start - 1)
+    {
         if line.trim() == "```mermaid" {
             in_code_block = true;
             continue;
@@ -475,7 +496,11 @@ fn create_source_edits(
 
     // If no code block was found, extract all lines
     if mermaid_code.is_empty() {
-        for line in lines.iter().skip(source_start + 1).take(source_end - source_start - 1) {
+        for line in lines
+            .iter()
+            .skip(source_start + 1)
+            .take(source_end - source_start - 1)
+        {
             if !mermaid_code.is_empty() {
                 mermaid_code.push('\n');
             }

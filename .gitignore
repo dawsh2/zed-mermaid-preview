@@ -6,6 +6,7 @@ Cargo.lock
 # Zed extension artifacts
 *.wasm
 mermaid-lsp
+release-artifacts/
 
 # OS generated files
 .DS_Store

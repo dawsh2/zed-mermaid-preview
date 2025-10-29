@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
-use std::fs;
-use std::process::Command;
+use std::{env, fs, path::PathBuf, process::Command};
+use which::which;
 
 /// Render Mermaid code to SVG using the mmdc CLI
 pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
@@ -11,15 +11,15 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
 
     // Create temporary file for the Mermaid input
     let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join(format!("mermaid_{}.mmd",
-        std::process::id()));
+    let temp_path = temp_dir.join(format!("mermaid_{}.mmd", std::process::id()));
 
     // Write the Mermaid content to temp file
-    fs::write(&temp_path, mermaid_code)
-        .map_err(|e| anyhow!("Failed to write temp file: {}", e))?;
+    fs::write(&temp_path, mermaid_code).map_err(|e| anyhow!("Failed to write temp file: {}", e))?;
+
+    let cli_path = mermaid_cli_path()?;
 
     // Render using mmdc
-    let output = Command::new("mmdc")
+    let output = Command::new(&cli_path)
         .arg("-i")
         .arg(&temp_path)
         .arg("-o")
@@ -65,10 +65,26 @@ fn sanitize_svg(svg: &str) -> Result<String> {
 
     // Remove common event handlers
     let dangerous_attributes = [
-        "onclick", "onload", "onerror", "onmouseover", "onmouseout",
-        "onfocus", "onblur", "onchange", "onsubmit", "onreset",
-        "onkeydown", "onkeyup", "onkeypress", "onmousedown", "onmouseup",
-        "onmousemove", "ondrag", "ondrop", "ontouchstart", "ontouchend",
+        "onclick",
+        "onload",
+        "onerror",
+        "onmouseover",
+        "onmouseout",
+        "onfocus",
+        "onblur",
+        "onchange",
+        "onsubmit",
+        "onreset",
+        "onkeydown",
+        "onkeyup",
+        "onkeypress",
+        "onmousedown",
+        "onmouseup",
+        "onmousemove",
+        "ondrag",
+        "ondrop",
+        "ontouchstart",
+        "ontouchend",
     ];
 
     for attr in &dangerous_attributes {
@@ -98,6 +114,21 @@ fn sanitize_svg(svg: &str) -> Result<String> {
     Ok(sanitized)
 }
 
+fn mermaid_cli_path() -> Result<PathBuf> {
+    if let Ok(path) = env::var("MERMAID_CLI_PATH") {
+        let candidate = PathBuf::from(path);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+        return Err(anyhow!(
+            "MERMAID_CLI_PATH points to '{}', but it is not a file",
+            candidate.display()
+        ));
+    }
+
+    which("mmdc").map_err(|_| anyhow!("Mermaid CLI (mmdc) not found in PATH"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,21 +144,27 @@ graph TD
     D --> E
 "#;
 
-        // This test requires mmdc to be installed
-        // Skip if mmdc is not available
-        if Command::new("mmdc").arg("--version").output().is_ok() {
-            let result = render_mermaid(mermaid_code);
-            assert!(result.is_ok(), "Failed to render simple diagram: {:?}", result.err());
-
-            let svg = result.unwrap();
-            assert!(svg.starts_with("<svg"), "Output should be SVG");
-            assert!(svg.contains("Start"), "SVG should contain diagram content");
+        if mermaid_cli_path().is_err() {
+            eprintln!("Skipping render test because Mermaid CLI is unavailable");
+            return;
         }
+
+        let result = render_mermaid(mermaid_code);
+        assert!(
+            result.is_ok(),
+            "Failed to render simple diagram: {:?}",
+            result.err()
+        );
+
+        let svg = result.unwrap();
+        assert!(svg.starts_with("<svg"), "Output should be SVG");
+        assert!(svg.contains("Start"), "SVG should contain diagram content");
     }
 
     #[test]
     fn test_sanitize_svg() {
-        let dangerous_svg = r#"<svg><script>alert('xss')</script><rect onclick="alert('xss')" /></svg>"#;
+        let dangerous_svg =
+            r#"<svg><script>alert('xss')</script><rect onclick="alert('xss')" /></svg>"#;
         let result = sanitize_svg(dangerous_svg);
         assert!(result.is_err(), "Should reject SVG with script tag");
 

@@ -1,6 +1,6 @@
 # Mermaid Preview Extension for Zed
 
-A Zed extension that renders Mermaid diagrams as SVG images directly in your markdown files.
+A Zed extension that renders Mermaid diagrams as SVG images directly in your Markdown files and dedicated `.mmd` documents.
 
 ## Features
 
@@ -12,8 +12,8 @@ A Zed extension that renders Mermaid diagrams as SVG images directly in your mar
 
 ## Requirements
 
-- [Mermaid CLI](https://github.com/mermaid-js/mermaid-cli) (`mmdc`) must be installed
-- The extension looks for `mmdc` in your PATH
+- [Mermaid CLI](https://github.com/mermaid-js/mermaid-cli) (`mmdc`) must be installed and discoverable either via `MERMAID_CLI_PATH` or your `PATH`
+- Rust with the `wasm32-wasip2` target (the scripts below add it automatically if needed)
 
 ### Installing Mermaid CLI
 
@@ -30,18 +30,24 @@ pnpm add -g @mermaid-js/mermaid-cli
 
 ## Installation
 
-1. Clone this repository to your Zed extensions directory:
-   ```bash
-   git clone https://github.com/your-username/mermaid-preview.git ~/.config/zed/extensions/mermaid-preview
-   ```
+The included helper scripts support a configurable extensions directory and Mermaid CLI path:
 
-2. Build the extension:
-   ```bash
-   cd ~/.config/zed/extensions/mermaid-preview
-   cargo build --release
-   ```
+- `ZED_EXTENSIONS_DIR`: overrides the default destination (`$HOME/.config/zed/extensions`).
+- `MERMAID_CLI_PATH`: absolute path to the `mmdc` binary when it is not in `PATH`.
 
-3. Restart Zed
+```bash
+# Clone the repository
+git clone https://github.com/daws/mermaid-preview.git
+cd mermaid-preview
+
+# Build artifacts locally (optional but useful when iterating)
+./build.sh
+
+# Install into your Zed extensions directory
+./install.sh
+
+# Restart Zed to load the extension
+```
 
 ## Usage
 
@@ -61,7 +67,7 @@ pnpm add -g @mermaid-js/mermaid-cli
 
 2. Select the code block (or place your cursor inside it)
 
-3. Right-click and choose "Render Mermaid Diagram" from the context menu
+3. Right-click and choose "Render Mermaid Diagram" from the context menu (or run the same command from the palette)
 
 4. The code block will be replaced with a rendered SVG image:
    ```markdown
@@ -87,7 +93,7 @@ pnpm add -g @mermaid-js/mermaid-cli
 
 3. Right-click and choose "Render Mermaid Diagram"
 
-4. An SVG image will be added at the top of the file
+4. An SVG image will be added at the top of the file alongside an embedded copy of the source
 
 ### Editing Rendered Diagrams
 
@@ -106,14 +112,14 @@ This extension consists of:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/mermaid-preview.git
+git clone https://github.com/daws/mermaid-preview.git
 cd mermaid-preview
 
-# Build the extension and LSP
-cargo build --release
-
-# The extension.wasm and mermaid-lsp binary will be created in the target/release directory
+# Build the extension and LSP (mirrors what install.sh runs)
+./build.sh
 ```
+
+Artifacts are written to `extension.wasm` and `mermaid-lsp` in the repository root for packaging.
 
 ### Testing
 
@@ -126,13 +132,46 @@ cargo test
 
 The extension uses a Language Server Protocol (LSP) approach:
 
-1. The WebAssembly extension starts a Rust LSP server
+1. The WebAssembly extension starts a Rust LSP server.
 2. When you select Mermaid code and use "Render Mermaid Diagram", the LSP:
    - Extracts the Mermaid code
-   - Calls `mmdc` to convert it to SVG
+   - Calls the Mermaid CLI (`mmdc`) to convert it to SVG (respecting `MERMAID_CLI_PATH` when set)
    - Writes the SVG file to disk
    - Replaces the code block with markdown image syntax
-3. Zed's markdown preview renders the SVG image inline with perfect scaling
+3. Zed's markdown preview renders the SVG image inline with perfect scaling.
+
+### Shipping the language server
+
+The WASM extension now downloads the native `mermaid-lsp` binary on demand from the latest GitHub release.
+
+- When the language server starts, it checks for a cached binary that matches the current platform (macOS, Linux, Windows across `aarch64`, `x86_64`, and `x86`).
+- If the binary is missing, the extension downloads `mermaid-lsp-<target>.zip` from the newest release of `daws/mermaid-preview`, unpacks it into `mermaid-lsp-cache/<version>/`, marks it executable, and launches it.
+- Asset names follow the Rust triple for each target (for example `mermaid-lsp-apple-darwin-aarch64.zip`, `mermaid-lsp-unknown-linux-gnu-x86_64.zip`, `mermaid-lsp-pc-windows-msvc-x86.zip`). Ensure each archive contains the compiled binary at the root.
+
+Developers can still run `./build.sh` locally when iterating—it produces the wasm artifact and a fresh `mermaid-lsp` binary for testing or for creating release assets. Setting `MERMAID_LSP_PATH` (or having `mermaid-lsp` on `PATH`) continues to override the download flow, which is handy for local builds.
+
+#### Cutting a release
+
+1. Push a tag or draft a GitHub Release in this repository.
+2. The `Build mermaid-lsp binaries` workflow runs for macOS (arm64 and x86_64), Linux (x86_64), and Windows (x86_64) targets.
+3. Each job invokes `scripts/package-mermaid-lsp.sh <target>` to compile `mermaid-lsp`, zip the binary as `mermaid-lsp-<target>.zip`, and upload it as a build artifact.
+4. When the release is published, the workflow automatically attaches those zip files to the GitHub Release so the extension can download them on demand.
+
+You can also trigger the workflow manually via the **Run workflow** button to produce fresh artifacts without publishing a release.
+
+### Dumb pipe language strategy
+
+- Markdown buffers keep using Zed's built-in Markdown language; the extension only reacts when it detects a ` ```mermaid` code fence.
+- Standalone `.mmd`/`.mermaid` files are registered as a `Mermaid` language that reuses the Markdown tree-sitter grammar bundled via this extension. The grammar is fetched and compiled on first install (similar to official Markdown-based extensions) and cached afterwards.
+- Because we're not injecting our own grammar, the extension behaves like a "dumb pipe": it shuttles text to the CLI, updates the document, and leaves syntax highlighting untouched.
+
+### Future grammar options
+
+If you decide to ship richer editor features later, you can:
+
+- **Reuse Markdown's tree-sitter grammar** – enables syntax-aware injections, highlighting, and smarter selections inside Mermaid blocks, but requires fetching/compiling the grammar during install and tracking upstream revisions.
+- **Author a minimal Mermaid grammar** – unlocks folding/indentation in `.mmd` files without pulling in the full Markdown parser, at the cost of maintaining your own tree-sitter grammar.
+- **Stay with `plain_text`** – if you fork the extension and swap the grammar back to `plain_text`, the install remains lightweight but `.mmd` files won't get syntax analysis. The current default favors the Markdown grammar for a better editing experience.
 
 ## Security
 

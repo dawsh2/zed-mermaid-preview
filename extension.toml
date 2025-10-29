@@ -1,15 +1,23 @@
 id = "mermaid-preview"
 name = "Mermaid Preview"
-description = "Mermaid diagram language server for Zed"
+description = "Render Mermaid diagrams from Markdown or .mmd files"
 version = "0.1.0"
 schema_version = 1
-authors = ["Your Name <you@example.com>"]
+authors = ["Mermaid Preview Maintainers"]
+repository = "https://github.com/daws/mermaid-preview"
 
 [compatibility]
-zed = "*"
-min_zed_version = "0.133.0"
+zed = "0.210.0"
 
 # Language server for Mermaid rendering
 [language_servers.mermaid]
-name = "Mermaid"
-languages = ["Markdown"]
+name = "Mermaid LSP"
+languages = ["Markdown", "Mermaid"]
+
+[language_servers.mermaid.language_ids]
+"Markdown" = "markdown"
+"Mermaid" = "mermaid"
+
+[grammars.markdown]
+repository = "https://github.com/tree-sitter-grammars/tree-sitter-markdown"
+rev = "be3e08acfd85bd87d85f41fde74fdcec25f76dbe"
