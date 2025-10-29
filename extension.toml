@@ -4,7 +4,7 @@ description = "Render Mermaid diagrams from Markdown or .mmd files"
 version = "0.1.0"
 schema_version = 1
 authors = ["Mermaid Preview Maintainers"]
-repository = "https://github.com/daws/mermaid-preview"
+repository = "https://github.com/dawsh2/zed-mermaid-preview"
 
 [compatibility]
 zed = "0.210.0"

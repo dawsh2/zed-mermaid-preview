@@ -6,7 +6,7 @@ use zed_extension_api::{
     self as zed, Architecture, DownloadedFileType, LanguageServerId, Os, Result,
 };
 
-const GITHUB_REPOSITORY: &str = "daws/mermaid-preview";
+const GITHUB_REPOSITORY: &str = "dawsh2/zed-mermaid-preview";
 const CACHE_ROOT: &str = "mermaid-lsp-cache";
 
 struct MermaidPreviewExtension {

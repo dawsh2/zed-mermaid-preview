@@ -37,7 +37,7 @@ The included helper scripts support a configurable extensions directory and Merm
 
 ```bash
 # Clone the repository
-git clone https://github.com/daws/mermaid-preview.git
+git clone https://github.com/dawsh2/zed-mermaid-preview.git
 cd mermaid-preview
 
 # Build artifacts locally (optional but useful when iterating)
@@ -112,7 +112,7 @@ This extension consists of:
 
 ```bash
 # Clone the repository
-git clone https://github.com/daws/mermaid-preview.git
+git clone https://github.com/dawsh2/zed-mermaid-preview.git
 cd mermaid-preview
 
 # Build the extension and LSP (mirrors what install.sh runs)
@@ -145,7 +145,7 @@ The extension uses a Language Server Protocol (LSP) approach:
 The WASM extension now downloads the native `mermaid-lsp` binary on demand from the latest GitHub release.
 
 - When the language server starts, it checks for a cached binary that matches the current platform (macOS, Linux, Windows across `aarch64`, `x86_64`, and `x86`).
-- If the binary is missing, the extension downloads `mermaid-lsp-<target>.zip` from the newest release of `daws/mermaid-preview`, unpacks it into `mermaid-lsp-cache/<version>/`, marks it executable, and launches it.
+- If the binary is missing, the extension downloads `mermaid-lsp-<target>.zip` from the newest release of `dawsh2/zed-mermaid-preview`, unpacks it into `mermaid-lsp-cache/<version>/`, marks it executable, and launches it.
 - Asset names follow the Rust triple for each target (for example `mermaid-lsp-apple-darwin-aarch64.zip`, `mermaid-lsp-unknown-linux-gnu-x86_64.zip`, `mermaid-lsp-pc-windows-msvc-x86.zip`). Ensure each archive contains the compiled binary at the root.
 
 The Mermaid language definition now reuses Zed's built-in Markdown grammar directly, so installs no longer need to fetch or compile `tree-sitter-markdown`. That keeps dev rebuilds fast and removes the long "compiling markdown parser" step.
