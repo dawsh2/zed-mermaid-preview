@@ -56,13 +56,16 @@ impl MermaidPreviewExtension {
         if let Ok(path) = env::var("MERMAID_LSP_PATH") {
             let candidate = PathBuf::from(path);
             if candidate.is_file() {
-                return Self::finalize_path(candidate, &mut self.lsp_path);
+                return Self::finalize_path(language_server_id, candidate, &mut self.lsp_path);
             }
         }
 
         if let Some(path) = worktree.which("mermaid-lsp") {
-            self.lsp_path = Some(path.clone());
-            return Ok(path);
+            return Self::finalize_path(
+                language_server_id,
+                PathBuf::from(path),
+                &mut self.lsp_path,
+            );
         }
 
         let lsp_binary_name = Self::lsp_binary_name();
@@ -73,12 +76,12 @@ impl MermaidPreviewExtension {
             .into_iter()
             .find(|candidate| candidate.is_file())
         {
-            return Self::finalize_path(path, &mut self.lsp_path);
+            return Self::finalize_path(language_server_id, path, &mut self.lsp_path);
         }
 
         let downloaded = self.download_lsp(language_server_id, &extension_dir, lsp_binary_name)?;
         if downloaded.is_file() {
-            return Self::finalize_path(downloaded, &mut self.lsp_path);
+            return Self::finalize_path(language_server_id, downloaded, &mut self.lsp_path);
         }
 
         let search_locations = Self::candidate_paths(&extension_dir, lsp_binary_name)
@@ -93,13 +96,23 @@ impl MermaidPreviewExtension {
         ))
     }
 
-    fn finalize_path(path: PathBuf, cache: &mut Option<String>) -> Result<String> {
+    fn finalize_path(
+        language_server_id: &LanguageServerId,
+        path: PathBuf,
+        cache: &mut Option<String>,
+    ) -> Result<String> {
         let resolved = path
             .canonicalize()
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
         *cache = Some(resolved.clone());
+
+        zed::set_language_server_installation_status(
+            language_server_id,
+            &zed::LanguageServerInstallationStatus::None,
+        );
+
         Ok(resolved)
     }
 
@@ -149,6 +162,10 @@ impl MermaidPreviewExtension {
         let binary_path = version_dir.join(binary_name);
 
         if binary_path.is_file() {
+            zed::set_language_server_installation_status(
+                language_server_id,
+                &zed::LanguageServerInstallationStatus::None,
+            );
             return Ok(binary_path);
         }
 
@@ -170,6 +187,13 @@ impl MermaidPreviewExtension {
         .map_err(|err| format!("failed to download mermaid-lsp asset: {err}"))?;
 
         if !binary_path.is_file() {
+            zed::set_language_server_installation_status(
+                language_server_id,
+                &zed::LanguageServerInstallationStatus::Failed(format!(
+                    "downloaded asset '{}' did not contain expected binary '{}'.",
+                    asset.name, binary_name
+                )),
+            );
             return Err(format!(
                 "downloaded asset '{asset_name}' did not contain expected binary '{binary_name}'",
                 asset_name = asset.name
