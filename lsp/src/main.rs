@@ -345,7 +345,7 @@ fn create_workspace_edits(
         (code, start_pos, end_pos)
     };
 
-    // Convert directly to PNG for inline viewing
+    // Convert to SVG for inline viewing
     use std::fs;
     use std::process::Command;
 
@@ -353,32 +353,28 @@ fn create_workspace_edits(
     let path = url.to_file_path()
         .map_err(|_| anyhow::anyhow!("Invalid file path"))?;
 
-    // Generate PNG filename based on the original file
-    let png_filename = match path.file_stem() {
+    // Generate SVG filename based on the original file
+    let svg_filename = match path.file_stem() {
         Some(stem) => {
             let stem_str = stem.to_string_lossy();
-            format!("{}_diagram.png", stem_str)
+            format!("{}_diagram.svg", stem_str)
         }
-        None => "diagram.png".to_string(),
+        None => "diagram.svg".to_string(),
     };
 
-    let png_path = path.parent()
+    let svg_path = path.parent()
         .unwrap_or_else(|| &path)
-        .join(&png_filename);
-    let png_path_str = png_path.to_string_lossy();
+        .join(&svg_filename);
+    let svg_path_str = svg_path.to_string_lossy();
 
-    // Convert directly to PNG using mmdc
-    let mut png_output = Command::new("mmdc")
+    // Convert to SVG using mmdc
+    let svg_output = Command::new("mmdc")
         .arg("-i") // input from stdin
         .arg("-")
-        .arg("-o") // output to stdout
-        .arg("-") // PNG output
-        .arg("-e") // specify PNG format
-        .arg("png")
-        .arg("-b") // transparent background
-        .arg("transparent")
+        .arg("-o") // output file
+        .arg(&svg_path)
+        .arg("-t") // transparent background
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| anyhow!("Failed to start mmdc: {}", e))?;
@@ -386,41 +382,35 @@ fn create_workspace_edits(
     // Write mermaid code to stdin
     {
         use std::io::Write;
-        let stdin = png_output.stdin.as_mut().unwrap();
+        let stdin = svg_output.stdin.as_mut().unwrap();
         stdin.write_all(mermaid_code.as_bytes())
             .map_err(|e| anyhow!("Failed to write to mmdc stdin: {}", e))?;
     }
 
-    // Get the output
-    let output = png_output.wait_with_output()
+    // Wait for completion
+    let output = svg_output.wait_with_output()
         .map_err(|e| anyhow!("Failed to get mmdc output: {}", e))?;
 
-    let png_data = if output.status.success() {
-        output.stdout
-    } else {
+    if !output.status.success() {
         let stderr = output.stderr;
-        return Err(anyhow!("PNG conversion failed: {}", String::from_utf8_lossy(&stderr)));
-    };
-
-    // Write PNG to file
-    fs::write(&png_path, &png_data)
-        .map_err(|e| anyhow!("Failed to write PNG file: {}", e))?;
+        return Err(anyhow!("SVG conversion failed: {}", String::from_utf8_lossy(&stderr)));
+    }
 
     // Create absolute path for img tag to ensure Zed can find it
-    let absolute_png_path = png_path_str.to_string();
+    let absolute_svg_path = svg_path_str.to_string();
 
     // Create output with Markdown image reference
     let output = if lines.iter().any(|line| line.trim_start().starts_with("```mermaid")) {
         // Markdown file - replace code block with image
         format!(
             "![Mermaid Diagram]({})\n\n<!-- mermaid-source\n``mermaid\n{}\n``\n-->",
-            absolute_png_path, mermaid_code
+            absolute_svg_path, mermaid_code
         )
     } else {
         // .mmd file - add image at top and keep source
         format!(
             "![Mermaid Diagram]({})\n\n<!-- mermaid-source\n{}\n-->",
-            absolute_png_path, mermaid_code
+            absolute_svg_path, mermaid_code
         )
     };
 
