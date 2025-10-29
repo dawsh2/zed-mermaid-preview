@@ -1,14 +1,14 @@
 # Mermaid Preview Extension for Zed
 
-A Zed extension that renders Mermaid diagrams as PNG images directly in your markdown files.
+A Zed extension that renders Mermaid diagrams as SVG images directly in your markdown files.
 
 ## Features
 
-- Render Mermaid diagrams to PNG images using the Mermaid CLI (mmdc)
+- Render Mermaid diagrams to SVG images using the Mermaid CLI (mmdc)
 - Works with both fenced code blocks in Markdown files (````mermaid`) and standalone `.mmd` files
 - Provides "Render Mermaid Diagram" and "Edit Mermaid Source" code actions
 - Keeps the original Mermaid source code in HTML comments for easy editing
-- PNG images render inline in Zed's markdown preview
+- SVG images render inline in Zed's markdown preview with perfect scaling
 
 ## Requirements
 
@@ -63,9 +63,9 @@ pnpm add -g @mermaid-js/mermaid-cli
 
 3. Right-click and choose "Render Mermaid Diagram" from the context menu
 
-4. The code block will be replaced with a rendered PNG image:
+4. The code block will be replaced with a rendered SVG image:
    ```markdown
-   ![Mermaid Diagram](/path/to/your/file_diagram.png)
+   ![Mermaid Diagram](/path/to/your/file_diagram.svg)
 
    <!-- mermaid-source
    ```mermaid
@@ -87,14 +87,14 @@ pnpm add -g @mermaid-js/mermaid-cli
 
 3. Right-click and choose "Render Mermaid Diagram"
 
-4. A PNG image will be added at the top of the file
+4. An SVG image will be added at the top of the file
 
 ### Editing Rendered Diagrams
 
 To edit a previously rendered diagram:
 1. Select the rendered image or comment block
 2. Right-click and choose "Edit Mermaid Source"
-3. The PNG will be replaced with the original Mermaid code block
+3. The SVG will be replaced with the original Mermaid code block
 
 ## Development
 
@@ -129,16 +129,16 @@ The extension uses a Language Server Protocol (LSP) approach:
 1. The WebAssembly extension starts a Rust LSP server
 2. When you select Mermaid code and use "Render Mermaid Diagram", the LSP:
    - Extracts the Mermaid code
-   - Calls `mmdc` to convert it to PNG
-   - Writes the PNG file to disk
+   - Calls `mmdc` to convert it to SVG
+   - Writes the SVG file to disk
    - Replaces the code block with markdown image syntax
-3. Zed's markdown preview renders the PNG image inline
+3. Zed's markdown preview renders the SVG image inline with perfect scaling
 
 ## Security
 
 - The LSP server runs in a sandboxed environment
 - All file operations are restricted to the project directory
-- PNG generation uses the trusted Mermaid CLI tool
+- SVG generation uses the trusted Mermaid CLI tool
 
 ## License
 
