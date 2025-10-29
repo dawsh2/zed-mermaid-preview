@@ -196,196 +196,254 @@ fn get_code_actions(
     documents: &HashMap<String, String>,
 ) -> Result<Vec<CodeAction>> {
     let uri = params.text_document.uri.to_string();
-    let range = params.range;
+    let cursor = params.range.start;
 
-    // Get document content
     let content = documents
         .get(&uri)
         .ok_or_else(|| anyhow::anyhow!("Document not found: {}", uri))?;
 
-    // Check if the selected range contains Mermaid code
-    if is_mermaid_selection(content, &range) {
-        let render_action = CodeAction {
+    let mut actions = Vec::new();
+
+    if let Some(block) = locate_mermaid_source_block(content, &uri, &cursor) {
+        let edit = WorkspaceEdit {
+            changes: Some(create_render_edits(&uri, &block)?),
+            document_changes: None,
+            change_annotations: None,
+        };
+
+        actions.push(CodeAction {
             title: "Render Mermaid Diagram".to_string(),
             kind: Some(CodeActionKind::REFACTOR_REWRITE),
             diagnostics: None,
-            edit: Some(WorkspaceEdit {
-                changes: Some(create_workspace_edits(&uri, content, &range)?),
-                document_changes: None,
-                change_annotations: None,
-            }),
+            edit: Some(edit),
             command: None,
             is_preferred: Some(true),
             disabled: None,
             data: None,
+        });
+    }
+
+    if let Some(block) = locate_rendered_mermaid_block(content, &uri, &cursor) {
+        let edit = WorkspaceEdit {
+            changes: Some(create_source_edits(&uri, &block)?),
+            document_changes: None,
+            change_annotations: None,
         };
 
-        // Also add an edit source action if it looks like rendered content
-        if is_rendered_mermaid(content, &range) {
-            let edit_action = CodeAction {
+        actions.insert(
+            0,
+            CodeAction {
                 title: "Edit Mermaid Source".to_string(),
                 kind: Some(CodeActionKind::REFACTOR_REWRITE),
                 diagnostics: None,
-                edit: Some(WorkspaceEdit {
-                    changes: Some(create_source_edits(&uri, content, &range)?),
-                    document_changes: None,
-                    change_annotations: None,
-                }),
+                edit: Some(edit),
                 command: None,
                 is_preferred: Some(true),
                 disabled: None,
                 data: None,
-            };
-
-            return Ok(vec![edit_action, render_action]);
-        }
-
-        return Ok(vec![render_action]);
+            },
+        );
     }
 
-    Ok(vec![])
+    Ok(actions)
 }
 
-fn is_mermaid_selection(content: &str, range: &Range) -> bool {
-    let lines: Vec<&str> = content.lines().collect();
-    let start_line = range.start.line as usize;
-    let end_line = range.end.line as usize;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocumentKind {
+    Markdown,
+    Mermaid,
+}
 
-    // Check if selection is within a Mermaid code block or contains Mermaid syntax
+#[derive(Clone, Debug)]
+struct MermaidSourceBlock {
+    code: String,
+    start: Position,
+    end: Position,
+    kind: DocumentKind,
+}
+
+#[derive(Clone, Debug)]
+struct RenderedMermaidBlock {
+    code: String,
+    start: Position,
+    end: Position,
+    kind: DocumentKind,
+}
+
+fn is_mermaid_document(uri: &str) -> bool {
+    uri.ends_with(".mmd") || uri.ends_with(".mermaid")
+}
+
+fn locate_mermaid_source_block(
+    content: &str,
+    uri: &str,
+    cursor: &Position,
+) -> Option<MermaidSourceBlock> {
+    if is_mermaid_document(uri) {
+        let lines: Vec<&str> = content.lines().collect();
+        let last_line = lines.len().saturating_sub(1);
+        let end_character = lines.get(last_line).map(|l| l.len()).unwrap_or(0);
+
+        return Some(MermaidSourceBlock {
+            code: content.to_string(),
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: last_line as u32,
+                character: end_character as u32,
+            },
+            kind: DocumentKind::Mermaid,
+        });
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
+    let (start_line, end_line) = find_mermaid_fence(&lines, cursor_line)?;
+
+    if start_line > 0 && lines[start_line - 1].contains("<!-- mermaid-source") {
+        return None;
+    }
+
+    let code = lines[start_line + 1..end_line].join("\n");
+
+    let end_position = if end_line + 1 < lines.len() {
+        Position {
+            line: (end_line + 1) as u32,
+            character: 0,
+        }
+    } else {
+        Position {
+            line: end_line as u32,
+            character: lines[end_line].len() as u32,
+        }
+    };
+
+    Some(MermaidSourceBlock {
+        code,
+        start: Position {
+            line: start_line as u32,
+            character: 0,
+        },
+        end: end_position,
+        kind: DocumentKind::Markdown,
+    })
+}
+
+fn locate_rendered_mermaid_block(
+    content: &str,
+    uri: &str,
+    cursor: &Position,
+) -> Option<RenderedMermaidBlock> {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
+    let comment_start = (0..=cursor_line)
+        .rev()
+        .find(|&i| lines[i].contains("<!-- mermaid-source"))?;
+
+    let comment_end = (comment_start..lines.len()).find(|&i| lines[i].contains("-->"))?;
+
+    let mut code_lines = Vec::new();
+    let mut inside_code = false;
+
     for line in lines
         .iter()
-        .skip(start_line)
-        .take(end_line - start_line + 1)
+        .skip(comment_start + 1)
+        .take(comment_end.saturating_sub(comment_start + 1))
     {
-        // Check for fenced code block
-        if line.trim().starts_with("```mermaid") {
-            return true;
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            if inside_code {
+                inside_code = false;
+            } else if trimmed.starts_with("```mermaid") {
+                inside_code = true;
+            }
+            continue;
         }
 
-        // Check for common Mermaid diagram types
-        let mermaid_patterns = [
-            "graph TD",
-            "graph LR",
-            "graph TB",
-            "graph BT",
-            "graph RL",
-            "flowchart TD",
-            "flowchart LR",
-            "flowchart TB",
-            "flowchart BT",
-            "flowchart RL",
-            "sequenceDiagram",
-            "classDiagram",
-            "stateDiagram",
-            "stateDiagram-v2",
-            "gantt",
-            "pie",
-            "journey",
-            "gitgraph",
-            "C4Context",
-            "mindmap",
-            "timeline",
-            "sankey",
-            "block",
-            "architecture",
-            "erDiagram",
-        ];
+        if inside_code {
+            code_lines.push(*line);
+        }
+    }
 
-        for pattern in &mermaid_patterns {
-            if line.trim().starts_with(pattern) {
-                return true;
+    if code_lines.is_empty() {
+        return None;
+    }
+
+    let code = code_lines.join("\n");
+
+    let image_line =
+        (comment_end + 1..lines.len()).find(|&i| lines[i].contains("![Mermaid Diagram]("));
+
+    let end_line = image_line.unwrap_or(comment_end);
+    let end_position = if end_line + 1 < lines.len() {
+        Position {
+            line: (end_line + 1) as u32,
+            character: 0,
+        }
+    } else {
+        Position {
+            line: end_line as u32,
+            character: lines[end_line].len() as u32,
+        }
+    };
+
+    Some(RenderedMermaidBlock {
+        code,
+        start: Position {
+            line: comment_start as u32,
+            character: 0,
+        },
+        end: end_position,
+        kind: if is_mermaid_document(uri) {
+            DocumentKind::Mermaid
+        } else {
+            DocumentKind::Markdown
+        },
+    })
+}
+
+fn find_mermaid_fence(lines: &[&str], cursor_line: usize) -> Option<(usize, usize)> {
+    let mut opening = None;
+
+    for i in (0..=cursor_line).rev() {
+        let trimmed = lines[i].trim_start();
+        if trimmed.starts_with("```") {
+            if trimmed.starts_with("```mermaid") {
+                opening = Some(i);
+                break;
+            } else {
+                return None;
             }
         }
     }
 
-    false
+    let start = opening?;
+    let end = (start + 1..lines.len()).find(|&i| {
+        lines[i].trim_start().starts_with("```") && !lines[i].trim_start().starts_with("```mermaid")
+    })?;
+
+    Some((start, end))
 }
 
-fn is_rendered_mermaid(content: &str, range: &Range) -> bool {
-    let lines: Vec<&str> = content.lines().collect();
-    let start_line = range.start.line as usize;
-    let end_line = range.end.line as usize;
-
-    // Check if selection contains our rendered content
-    for line in lines
-        .iter()
-        .skip(start_line)
-        .take(end_line - start_line + 1)
-    {
-        if line.contains("<!-- mermaid-source")
-            || line.contains("![Mermaid Diagram](")
-            || line.contains("<svg")
-        {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn create_workspace_edits(
+fn create_render_edits(
     uri: &str,
-    content: &str,
-    range: &Range,
+    block: &MermaidSourceBlock,
 ) -> Result<HashMap<Url, Vec<TextEdit>>> {
-    let lines: Vec<&str> = content.lines().collect();
-    let start_line = range.start.line as usize;
-    let end_line = range.end.line as usize;
-
-    // Check if this is a fenced code block in Markdown or a whole .mmd file
-    let (mermaid_code, start_pos, end_pos) = if lines
-        .iter()
-        .any(|line| line.trim_start().starts_with("```mermaid"))
-    {
-        // This is a fenced code block - find the boundaries
-        let block_start = (0..=start_line)
-            .rev()
-            .find(|&i| lines[i].trim_start().starts_with("```mermaid"))
-            .ok_or_else(|| anyhow::anyhow!("No ```mermaid found"))?;
-
-        let block_end = (end_line..lines.len())
-            .find(|&i| lines[i].trim_start() == "```")
-            .ok_or_else(|| anyhow::anyhow!("No closing ``` found"))?;
-
-        // Extract Mermaid code from inside the code block
-        let code = lines[block_start + 1..block_end]
-            .iter()
-            .copied()
-            .collect::<Vec<&str>>()
-            .join("\n");
-
-        let start_pos = Position {
-            line: block_start as u32,
-            character: 0,
-        };
-        let end_pos = Position {
-            line: block_end as u32,
-            character: lines[block_end].len() as u32,
-        };
-
-        (code, start_pos, end_pos)
-    } else {
-        // This is a whole .mmd file - use the entire content
-        let code = content.to_string();
-
-        let start_pos = Position {
-            line: 0,
-            character: 0,
-        };
-        let end_pos = Position {
-            line: (lines.len() - 1) as u32,
-            character: lines[lines.len() - 1].len() as u32,
-        };
-
-        (code, start_pos, end_pos)
-    };
-
     let url = Url::parse(uri)?;
     let path = url
         .to_file_path()
         .map_err(|_| anyhow::anyhow!("Invalid file path"))?;
 
-    // Generate SVG filename based on the original file
     let svg_filename = match path.file_stem() {
         Some(stem) => {
             let stem_str = stem.to_string_lossy();
@@ -394,8 +452,8 @@ fn create_workspace_edits(
         None => "diagram.svg".to_string(),
     };
 
-    let svg_path = path.parent().unwrap_or_else(|| &path).join(&svg_filename);
-    let svg_contents = render_mermaid(&mermaid_code)?;
+    let svg_path = path.parent().unwrap_or(&path).join(&svg_filename);
+    let svg_contents = render_mermaid(&block.code)?;
 
     if let Some(parent) = svg_path.parent() {
         if !parent.exists() {
@@ -413,33 +471,32 @@ fn create_workspace_edits(
         .to_string_lossy()
         .to_string();
 
-    // Create output with Markdown image reference
-    let output = if lines
-        .iter()
-        .any(|line| line.trim_start().starts_with("```mermaid"))
-    {
-        // Markdown file - replace code block with image
-        format!(
-            "![Mermaid Diagram]({})\n\n<!-- mermaid-source\n``mermaid\n{}\n``\n-->",
-            absolute_svg_path, mermaid_code
-        )
-    } else {
-        // .mmd file - add image at top and keep source
-        format!(
-            "![Mermaid Diagram]({})\n\n<!-- mermaid-source\n{}\n-->",
-            absolute_svg_path, mermaid_code
-        )
+    let mut new_text = match block.kind {
+        DocumentKind::Markdown => format!(
+            "<!-- mermaid-source\n```mermaid\n{}\n```\n-->\n\n![Mermaid Diagram]({})\n",
+            block.code.trim_end(),
+            absolute_svg_path
+        ),
+        DocumentKind::Mermaid => format!(
+            "<!-- mermaid-source\n{}\n-->\n\n![Mermaid Diagram]({})\n",
+            block.code.trim_end(),
+            absolute_svg_path
+        ),
     };
+
+    if !new_text.ends_with('\n') {
+        new_text.push('\n');
+    }
 
     let mut changes = HashMap::new();
     changes.insert(
         Url::parse(uri)?,
         vec![TextEdit {
             range: Range {
-                start: start_pos,
-                end: end_pos,
+                start: block.start.clone(),
+                end: block.end.clone(),
             },
-            new_text: output,
+            new_text,
         }],
     );
 
@@ -448,88 +505,27 @@ fn create_workspace_edits(
 
 fn create_source_edits(
     uri: &str,
-    content: &str,
-    range: &Range,
+    block: &RenderedMermaidBlock,
 ) -> Result<HashMap<Url, Vec<TextEdit>>> {
-    let lines: Vec<&str> = content.lines().collect();
-    let start_line = range.start.line as usize;
-    let _end_line = range.end.line as usize;
-
-    // Find the img reference or mermaid-source comment
-    let img_start = (0..=start_line)
-        .rev()
-        .find(|&i| lines[i].contains("![Mermaid Diagram]("))
-        .ok_or_else(|| anyhow::anyhow!("No Mermaid diagram reference found"))?;
-
-    // Find the mermaid-source comment
-    let source_start = (img_start..lines.len())
-        .find(|&i| lines[i].contains("<!-- mermaid-source"))
-        .ok_or_else(|| anyhow::anyhow!("No mermaid-source comment found"))?;
-
-    let source_end = (source_start..lines.len())
-        .find(|&i| lines[i].contains("-->"))
-        .ok_or_else(|| anyhow::anyhow!("No end comment found"))?;
-
-    // Extract source code from inside the comment
-    let mut mermaid_code = String::new();
-    let mut in_code_block = false;
-
-    for line in lines
-        .iter()
-        .skip(source_start + 1)
-        .take(source_end - source_start - 1)
-    {
-        if line.trim() == "```mermaid" {
-            in_code_block = true;
-            continue;
-        }
-        if line.trim() == "```" && in_code_block {
-            break;
-        }
-        if in_code_block {
-            if !mermaid_code.is_empty() {
-                mermaid_code.push('\n');
-            }
-            mermaid_code.push_str(line);
-        }
+    let mut code = block.code.clone();
+    if !code.ends_with('\n') {
+        code.push('\n');
     }
 
-    // If no code block was found, extract all lines
-    if mermaid_code.is_empty() {
-        for line in lines
-            .iter()
-            .skip(source_start + 1)
-            .take(source_end - source_start - 1)
-        {
-            if !mermaid_code.is_empty() {
-                mermaid_code.push('\n');
-            }
-            mermaid_code.push_str(line);
-        }
-    }
-
-    let start_pos = Position {
-        line: img_start as u32,
-        character: 0,
+    let new_text = match block.kind {
+        DocumentKind::Markdown => format!("```mermaid\n{}```\n", code),
+        DocumentKind::Mermaid => code,
     };
-
-    let end_pos = Position {
-        line: (source_end + 1) as u32,
-        character: 0,
-    };
-
-    // Create code block
-    let output = format!("```mermaid\n{}\n```", mermaid_code);
 
     let mut changes = HashMap::new();
     changes.insert(
         Url::parse(uri)?,
         vec![TextEdit {
             range: Range {
-                start: start_pos,
-                end: end_pos,
+                start: block.start.clone(),
+                end: block.end.clone(),
             },
-            new_text: output,
+            new_text,
         }],
     );
 
