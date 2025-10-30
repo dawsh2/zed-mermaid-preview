@@ -848,7 +848,7 @@ fn create_render_edits(
 
     let mut new_text = format!(
         "<!-- mermaid-source-file:{} -->\n\n![Mermaid Diagram]({})\n",
-        source_relative, svg_relative
+        source_relative.trim(), svg_relative
     );
 
     // Debug: Log what we're doing
