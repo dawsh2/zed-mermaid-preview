@@ -589,7 +589,7 @@ fn locate_rendered_mermaid_block(
     let line = lines[source_line].trim();
     let file_start = "<!-- mermaid-source-file:".len();
     let file_end = line.len() - "-->".len();
-    let source_file_path = &line[file_start..file_end];
+    let source_file_path = &line[file_start..file_end].trim();
 
     // Get the full path to the source file
     let source_full_path = if let Ok(url) = Url::parse(uri) {
