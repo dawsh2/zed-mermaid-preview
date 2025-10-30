@@ -27,7 +27,7 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
     let default_config_path = temp_dir.path().join("config.json");
     fs::write(
         &default_config_path,
-        r#"{"flowchart":{"htmlLabels":true},"sequence":{"htmlLabels":true},"class":{"htmlLabels":true},"er":{"htmlLabels":true}}"#,
+        r#"{"flowchart":{"htmlLabels":false},"sequence":{"htmlLabels":false},"class":{"htmlLabels":false},"er":{"htmlLabels":false}}"#,
     )
     .map_err(|e| anyhow!("Failed to write Mermaid config: {}", e))?;
 
