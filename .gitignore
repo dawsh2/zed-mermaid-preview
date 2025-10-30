@@ -28,3 +28,9 @@ Thumbs.db
 test_*.png
 test_*.svg
 test_*.mmd
+
+# Generated Mermaid files (except in .mermaid directory)
+*.mmd
+*.svg
+!/.mermaid/*.mmd
+!/.mermaid/*.svg
