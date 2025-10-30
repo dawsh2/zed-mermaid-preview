@@ -1,0 +1,10 @@
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Processing: Start
+    Processing --> Validating: Validate data
+    Validating --> Processing: Retry
+    Validating --> Storing: Valid
+    Storing --> Done: Success
+    Processing --> Error: Failure
+    Error --> Idle: Reset
+    Done --> Idle: Complete
