@@ -98,8 +98,8 @@ fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String
 
 fn main() -> Result<()> {
     // Log to stderr for debugging
-    eprintln!("Mermaid LSP v0.1.12 starting with debug logging enabled...");
-    eprintln!("DEBUG: ========== BINARY v0.1.12-enhanced-debug-10:49 ==========");
+    eprintln!("Mermaid LSP v0.1.16 starting with debug logging enabled...");
+    eprintln!("DEBUG: ========== BINARY v0.1.16-enhanced-debug-11:20 ==========");
 
     // Log current working directory
     if let Ok(cwd) = std::env::current_dir() {

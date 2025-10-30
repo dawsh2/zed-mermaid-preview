@@ -44,9 +44,7 @@ impl MermaidPreviewExtension {
         worktree: &zed::Worktree,
         language_server_id: &LanguageServerId,
     ) -> Result<String> {
-        // Always try to get the latest version - don't use stale cache
-        // This fixes the issue where Zed wouldn't update to newer LSP binaries
-
+        // Check for explicit local development path first
         if let Ok(path) = env::var("MERMAID_LSP_PATH") {
             let candidate = PathBuf::from(path);
             if candidate.is_file() {
@@ -54,29 +52,42 @@ impl MermaidPreviewExtension {
             }
         }
 
-        if let Some(path) = worktree.which("mermaid-lsp") {
-            return Self::finalize_path(
-                language_server_id,
-                PathBuf::from(path),
-                &mut self.lsp_path,
-            );
+        // For development, check local PATH before GitHub releases
+        if worktree.which("mermaid-lsp").is_some() {
+            if let Some(path) = worktree.which("mermaid-lsp") {
+                return Self::finalize_path(
+                    language_server_id,
+                    PathBuf::from(path),
+                    &mut self.lsp_path,
+                );
+            }
         }
 
+        // Always prioritize latest GitHub release over stale cache
+        // This ensures users automatically get the latest fixes
         let lsp_binary_name = Self::lsp_binary_name();
         let extension_dir = env::current_dir()
             .map_err(|error| format!("unable to determine extension directory: {error}"))?;
 
+        // First try to download the latest release from GitHub
+        match self.download_lsp(language_server_id, &extension_dir, lsp_binary_name) {
+            Ok(downloaded) if downloaded.is_file() => {
+                return Self::finalize_path(language_server_id, downloaded, &mut self.lsp_path);
+            }
+            Err(e) => {
+                eprintln!("Failed to download latest LSP: {}", e);
+                // Fall through to local binary checks
+            }
+            _ => {}
+        }
+
+        // Only check local binaries as fallback
         if let Some(path) = Self::candidate_paths(&extension_dir, lsp_binary_name)
             .into_iter()
             .find(|candidate| candidate.is_file())
         {
+            eprintln!("Using local LSP binary as fallback: {}", path.display());
             return Self::finalize_path(language_server_id, path, &mut self.lsp_path);
-        }
-
-        // Always download the latest release from GitHub
-        let downloaded = self.download_lsp(language_server_id, &extension_dir, lsp_binary_name)?;
-        if downloaded.is_file() {
-            return Self::finalize_path(language_server_id, downloaded, &mut self.lsp_path);
         }
 
         let search_locations = Self::candidate_paths(&extension_dir, lsp_binary_name)
@@ -156,15 +167,31 @@ impl MermaidPreviewExtension {
         let version_dir = extension_dir.join(CACHE_ROOT).join(&release.version);
         let binary_path = version_dir.join(binary_name);
 
-        // Always use the latest version, even if already downloaded
-        // This ensures users get the latest fixes automatically
+        // Check if we already have the latest version
         if binary_path.is_file() {
-            eprintln!("Using latest LSP version: {}", release.version);
-            zed::set_language_server_installation_status(
-                language_server_id,
-                &zed::LanguageServerInstallationStatus::None,
-            );
-            return Ok(binary_path);
+            // Check if the binary is actually functional by testing it
+            match std::process::Command::new(&binary_path)
+                .arg("--version")
+                .output()
+            {
+                Ok(output) => {
+                    if output.status.success() {
+                        eprintln!("Using latest LSP version: {}", release.version);
+                        zed::set_language_server_installation_status(
+                            language_server_id,
+                            &zed::LanguageServerInstallationStatus::None,
+                        );
+                        return Ok(binary_path);
+                    } else {
+                        eprintln!("Existing binary is broken, re-downloading version: {}", release.version);
+                        // Continue to re-download
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to test existing binary ({}), re-downloading: {}", e, release.version);
+                    // Continue to re-download
+                }
+            }
         }
 
         fs::create_dir_all(&version_dir)
