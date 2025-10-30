@@ -44,14 +44,8 @@ impl MermaidPreviewExtension {
         worktree: &zed::Worktree,
         language_server_id: &LanguageServerId,
     ) -> Result<String> {
-        if let Some(path) = self
-            .lsp_path
-            .as_ref()
-            .filter(|candidate| Path::new(candidate).is_file())
-            .cloned()
-        {
-            return Ok(path);
-        }
+        // Always try to get the latest version - don't use stale cache
+        // This fixes the issue where Zed wouldn't update to newer LSP binaries
 
         if let Ok(path) = env::var("MERMAID_LSP_PATH") {
             let candidate = PathBuf::from(path);
@@ -79,6 +73,7 @@ impl MermaidPreviewExtension {
             return Self::finalize_path(language_server_id, path, &mut self.lsp_path);
         }
 
+        // Always download the latest release from GitHub
         let downloaded = self.download_lsp(language_server_id, &extension_dir, lsp_binary_name)?;
         if downloaded.is_file() {
             return Self::finalize_path(language_server_id, downloaded, &mut self.lsp_path);
@@ -161,7 +156,10 @@ impl MermaidPreviewExtension {
         let version_dir = extension_dir.join(CACHE_ROOT).join(&release.version);
         let binary_path = version_dir.join(binary_name);
 
+        // Always use the latest version, even if already downloaded
+        // This ensures users get the latest fixes automatically
         if binary_path.is_file() {
+            eprintln!("Using latest LSP version: {}", release.version);
             zed::set_language_server_installation_status(
                 language_server_id,
                 &zed::LanguageServerInstallationStatus::None,
