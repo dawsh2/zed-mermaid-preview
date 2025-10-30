@@ -32,6 +32,7 @@ fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String
         use std::io::Write;
         let _ = writeln!(file, "[{}] Searching for recent source file matching pattern", chrono::Utc::now().format("%H:%M:%S"));
         let _ = writeln!(file, "[{}] Missing path: {:?}", chrono::Utc::now().format("%H:%M:%S"), missing_path);
+        let _ = file.flush();
     }
 
     // Extract the base filename pattern from the missing path
@@ -97,7 +98,8 @@ fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String
 
 fn main() -> Result<()> {
     // Log to stderr for debugging
-    eprintln!("Mermaid LSP starting with debug logging enabled...");
+    eprintln!("Mermaid LSP v0.1.12 starting with debug logging enabled...");
+    eprintln!("DEBUG: ========== BINARY v0.1.12-enhanced-debug-10:49 ==========");
 
     // Log current working directory
     if let Ok(cwd) = std::env::current_dir() {
@@ -115,6 +117,7 @@ fn main() -> Result<()> {
         if let Ok(cwd) = std::env::current_dir() {
             let _ = writeln!(file, "[{}] LSP working directory: {:?}", chrono::Utc::now().format("%H:%M:%S"), cwd);
         }
+        let _ = file.flush();
     }
 
     // Create JSON-RPC connection
@@ -336,6 +339,7 @@ fn get_code_actions(
     {
         use std::io::Write;
         let _ = writeln!(file, "[{}] get_code_actions - URI: {}, line: {}", chrono::Utc::now().format("%H:%M:%S"), uri, cursor.line);
+        let _ = file.flush();
     }
 
     let content = documents
@@ -523,13 +527,31 @@ fn locate_rendered_mermaid_block(
     uri: &str,
     cursor: &Position,
 ) -> Option<RenderedMermaidBlock> {
+    // Log immediately
+    eprintln!("DEBUG: locate_rendered_mermaid_block ENTRY - content length: {}", content.len());
+
     let lines: Vec<&str> = content.lines().collect();
+    eprintln!("DEBUG: locate_rendered_mermaid_block - parsed {} lines", lines.len());
+
     if lines.is_empty() {
+        eprintln!("DEBUG: locate_rendered_mermaid_block - EARLY RETURN: lines.is_empty()");
         return None;
     }
 
     let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
     eprintln!("DEBUG: locate_rendered_mermaid_block - cursor at line {}, total lines: {}", cursor_line, lines.len());
+
+    // Log to file immediately
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/mermaid-lsp-debug.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "[{}] === locate_rendered_mermaid_block called ===", chrono::Utc::now().format("%H:%M:%S"));
+        let _ = writeln!(file, "[{}] Cursor line: {}, total lines: {}", chrono::Utc::now().format("%H:%M:%S"), cursor_line, lines.len());
+        let _ = file.flush();
+    }
 
     // Find comment with mermaid source file reference - expand search range
     let search_start = cursor_line.saturating_sub(10);
@@ -548,6 +570,7 @@ fn locate_rendered_mermaid_block(
             {
                 use std::io::Write;
                 let _ = writeln!(file, "[{}] Line {}: '{}'", chrono::Utc::now().format("%H:%M:%S"), i, lines[i]);
+                let _ = file.flush();
             }
         }
     }
@@ -578,6 +601,22 @@ fn locate_rendered_mermaid_block(
                 eprintln!("DEBUG: Document parent: {:?}", parent);
                 eprintln!("DEBUG: Relative source file: {}", source_file_path);
                 eprintln!("DEBUG: Resolved full path: {:?}", full_path);
+
+                // Log to file
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/mermaid-lsp-debug.log")
+                {
+                    use std::io::Write;
+                    let _ = writeln!(file, "[{}] Document path: {:?}", chrono::Utc::now().format("%H:%M:%S"), path);
+                    let _ = writeln!(file, "[{}] Document parent: {:?}", chrono::Utc::now().format("%H:%M:%S"), parent);
+                    let _ = writeln!(file, "[{}] Relative source file: {}", chrono::Utc::now().format("%H:%M:%S"), source_file_path);
+                    let _ = writeln!(file, "[{}] Resolved full path: {:?}", chrono::Utc::now().format("%H:%M:%S"), full_path);
+                    let _ = writeln!(file, "[{}] File exists: {}", chrono::Utc::now().format("%H:%M:%S"), full_path.exists());
+                    let _ = file.flush();
+                }
+
                 full_path
             } else {
                 eprintln!("DEBUG: No parent directory for document, using relative path");
@@ -607,6 +646,7 @@ fn locate_rendered_mermaid_block(
             {
                 use std::io::Write;
                 let _ = writeln!(file, "[{}] Successfully read source file ({} bytes)", chrono::Utc::now().format("%H:%M:%S"), content.len());
+                let _ = file.flush();
             }
             content
         }
@@ -623,6 +663,7 @@ fn locate_rendered_mermaid_block(
                 let _ = writeln!(file, "[{}] Failed to read source file: {}, trying to find recent match", chrono::Utc::now().format("%H:%M:%S"), e);
                 let _ = writeln!(file, "[{}] File existence check: {}", chrono::Utc::now().format("%H:%M:%S"), source_full_path.exists());
                 let _ = writeln!(file, "[{}] Attempting to find most recent source file...", chrono::Utc::now().format("%H:%M:%S"));
+                let _ = file.flush();
             }
 
             // Try to find the most recent matching file
@@ -639,6 +680,7 @@ fn locate_rendered_mermaid_block(
                 {
                     use std::io::Write;
                     let _ = writeln!(file, "[{}] FAILED: Could not find any recent source file", chrono::Utc::now().format("%H:%M:%S"));
+                    let _ = file.flush();
                 }
                 return None;
             }
@@ -669,6 +711,7 @@ fn locate_rendered_mermaid_block(
     {
         use std::io::Write;
         let _ = writeln!(file, "[{}] SUCCESS: Found rendered block, returning Some", chrono::Utc::now().format("%H:%M:%S"));
+        let _ = file.flush();
     }
 
     Some(RenderedMermaidBlock {
