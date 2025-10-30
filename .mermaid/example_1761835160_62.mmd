@@ -1,0 +1,20 @@
+classDiagram
+    class Animal {
+        +String name
+        +int age
+        +eat()
+        +sleep()
+    }
+    class Dog {
+        +String breed
+        +bark()
+        +wagTail()
+    }
+    class Cat {
+        +String color
+        +meow()
+        +scratch()
+    }
+    Animal <|-- Dog
+    Animal <|-- Cat
+    Dog --> "1..*" Toy : has
