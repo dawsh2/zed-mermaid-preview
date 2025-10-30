@@ -23,6 +23,17 @@ static SVG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String> {
     eprintln!("DEBUG: Searching for recent source file matching pattern");
 
+    // Log to file
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/mermaid-lsp-debug.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "[{}] Searching for recent source file matching pattern", chrono::Utc::now().format("%H:%M:%S"));
+        let _ = writeln!(file, "[{}] Missing path: {:?}", chrono::Utc::now().format("%H:%M:%S"), missing_path);
+    }
+
     // Extract the base filename pattern from the missing path
     if let Some(file_name) = missing_path.file_name().and_then(|n| n.to_str()) {
         // Extract base name and diagram number (e.g., "example_0" from "example_1761843815_0.mmd")
@@ -88,6 +99,11 @@ fn main() -> Result<()> {
     // Log to stderr for debugging
     eprintln!("Mermaid LSP starting with debug logging enabled...");
 
+    // Log current working directory
+    if let Ok(cwd) = std::env::current_dir() {
+        eprintln!("DEBUG: LSP working directory: {:?}", cwd);
+    }
+
     // Also try to log to a file
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
@@ -96,6 +112,9 @@ fn main() -> Result<()> {
     {
         use std::io::Write;
         let _ = writeln!(file, "[{}] Mermaid LSP starting", chrono::Utc::now().format("%H:%M:%S"));
+        if let Ok(cwd) = std::env::current_dir() {
+            let _ = writeln!(file, "[{}] LSP working directory: {:?}", chrono::Utc::now().format("%H:%M:%S"), cwd);
+        }
     }
 
     // Create JSON-RPC connection
@@ -554,27 +573,46 @@ fn locate_rendered_mermaid_block(
         if let Some(path) = url.to_file_path().ok() {
             // source_file_path is relative to the document's parent
             if let Some(parent) = path.parent() {
-                parent.join(source_file_path)
+                let full_path = parent.join(source_file_path);
+                eprintln!("DEBUG: Document path: {:?}", path);
+                eprintln!("DEBUG: Document parent: {:?}", parent);
+                eprintln!("DEBUG: Relative source file: {}", source_file_path);
+                eprintln!("DEBUG: Resolved full path: {:?}", full_path);
+                full_path
             } else {
+                eprintln!("DEBUG: No parent directory for document, using relative path");
                 Path::new(source_file_path).to_path_buf()
             }
         } else {
+            eprintln!("DEBUG: Could not parse URI to file path: {}", uri);
             Path::new(source_file_path).to_path_buf()
         }
     } else {
+        eprintln!("DEBUG: Could not parse URI: {}", uri);
         Path::new(source_file_path).to_path_buf()
     };
 
     eprintln!("DEBUG: Looking for source file at: {:?}", source_full_path);
+    eprintln!("DEBUG: File exists: {}", source_full_path.exists());
 
     // Read the source from the file
     let code = match fs::read_to_string(&source_full_path) {
         Ok(content) => {
             eprintln!("DEBUG: Successfully read source file ({} bytes)", content.len());
+            // Log to file
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/mermaid-lsp-debug.log")
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "[{}] Successfully read source file ({} bytes)", chrono::Utc::now().format("%H:%M:%S"), content.len());
+            }
             content
         }
         Err(e) => {
             eprintln!("DEBUG: Failed to read source file: {}, attempting to find recent file...", e);
+            eprintln!("DEBUG: Error details: {:?}", e.kind());
             // Log to file
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
@@ -583,6 +621,8 @@ fn locate_rendered_mermaid_block(
             {
                 use std::io::Write;
                 let _ = writeln!(file, "[{}] Failed to read source file: {}, trying to find recent match", chrono::Utc::now().format("%H:%M:%S"), e);
+                let _ = writeln!(file, "[{}] File existence check: {}", chrono::Utc::now().format("%H:%M:%S"), source_full_path.exists());
+                let _ = writeln!(file, "[{}] Attempting to find most recent source file...", chrono::Utc::now().format("%H:%M:%S"));
             }
 
             // Try to find the most recent matching file
@@ -591,6 +631,15 @@ fn locate_rendered_mermaid_block(
                 recent_code
             } else {
                 eprintln!("DEBUG: Could not find any recent source file");
+                // Log to file
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/mermaid-lsp-debug.log")
+                {
+                    use std::io::Write;
+                    let _ = writeln!(file, "[{}] FAILED: Could not find any recent source file", chrono::Utc::now().format("%H:%M:%S"));
+                }
                 return None;
             }
         }
