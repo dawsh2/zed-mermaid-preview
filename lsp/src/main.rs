@@ -34,6 +34,24 @@ fn debug_print(msg: &str) {
     }
 }
 
+// Strip mermaid wrapper (```mermaid ... ```) from code if present
+fn strip_mermaid_wrapper(code: &str) -> String {
+    let trimmed = code.trim();
+
+    // Check if code starts with ```mermaid and ends with ```
+    if trimmed.starts_with("```mermaid") && trimmed.ends_with("```") {
+        // Split by lines and remove first and last line
+        let lines: Vec<&str> = trimmed.lines().collect();
+        if lines.len() >= 3 {
+            // Remove the first line (```mermaid) and last line (```)
+            return lines[1..lines.len()-1].join("\n");
+        }
+    }
+
+    // Return as-is if no wrapper found
+    code.to_string()
+}
+
 // Find the most recent matching source file when the referenced file doesn't exist
 fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String> {
     debug_print("Searching for recent source file matching pattern");
@@ -468,8 +486,11 @@ fn locate_mermaid_source_block(
         let last_line = lines.len().saturating_sub(1);
         let end_character = lines.get(last_line).map(|l| l.len()).unwrap_or(0);
 
+        // Strip mermaid wrapper if present
+        let clean_code = strip_mermaid_wrapper(content);
+
         return Some(MermaidSourceBlock {
-            code: content.to_string(),
+            code: clean_code,
             start: Position {
                 line: 0,
                 character: 0,
