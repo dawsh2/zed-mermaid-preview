@@ -19,21 +19,24 @@ use crate::render::render_mermaid;
 
 static SVG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+// Helper function to check if debug logging is enabled
+fn is_debug_enabled() -> bool {
+    std::env::var("MERMAID_LSP_DEBUG")
+        .unwrap_or_else(|_| "false".to_string())
+        .parse::<bool>()
+        .unwrap_or(false)
+}
+
+// Helper function for conditional debug logging
+fn debug_print(msg: &str) {
+    if is_debug_enabled() {
+        eprintln!("{}", msg);
+    }
+}
+
 // Find the most recent matching source file when the referenced file doesn't exist
 fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String> {
-    eprintln!("DEBUG: Searching for recent source file matching pattern");
-
-    // Log to file
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/mermaid-lsp-debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "[{}] Searching for recent source file matching pattern", chrono::Utc::now().format("%H:%M:%S"));
-        let _ = writeln!(file, "[{}] Missing path: {:?}", chrono::Utc::now().format("%H:%M:%S"), missing_path);
-        let _ = file.flush();
-    }
+    debug_print("Searching for recent source file matching pattern");
 
     // Extract the base filename pattern from the missing path
     if let Some(file_name) = missing_path.file_name().and_then(|n| n.to_str()) {
@@ -50,7 +53,9 @@ fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String
             // Get the directory to search in
             let search_dir = missing_path.parent().unwrap_or_else(|| Path::new(".mermaid"));
 
-            eprintln!("DEBUG: Searching in {:?} for pattern {}", search_dir, pattern);
+            if is_debug_enabled() {
+                eprintln!("Searching in {:?} for pattern {}", search_dir, pattern);
+            }
 
             // Find all matching files and get the most recent one
             if let Ok(entries) = std::fs::read_dir(search_dir) {
@@ -80,11 +85,15 @@ fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String
 
                 if let Some((best_entry, _)) = best_match {
                     let best_path = best_entry.path();
-                    eprintln!("DEBUG: Found most recent match: {:?}", best_path);
+                    if is_debug_enabled() {
+                        eprintln!("Found most recent match: {:?}", best_path);
+                    }
 
                     // Try to read it
                     if let Ok(content) = std::fs::read_to_string(&best_path) {
-                        eprintln!("DEBUG: Successfully read recent file ({} bytes)", content.len());
+                        if is_debug_enabled() {
+                            eprintln!("Successfully read recent file ({} bytes)", content.len());
+                        }
                         return Some(content);
                     }
                 }
@@ -92,32 +101,19 @@ fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String
         }
     }
 
-    eprintln!("DEBUG: No recent source file found");
+    if is_debug_enabled() {
+        eprintln!("No recent source file found");
+    }
     None
 }
 
 fn main() -> Result<()> {
-    // Log to stderr for debugging
-    eprintln!("Mermaid LSP v0.1.17 starting with debug logging enabled...");
-    eprintln!("DEBUG: ========== BINARY v0.1.17-enhanced-debug-11:35 ==========");
-
-    // Log current working directory
-    if let Ok(cwd) = std::env::current_dir() {
-        eprintln!("DEBUG: LSP working directory: {:?}", cwd);
-    }
-
-    // Also try to log to a file
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/mermaid-lsp-debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "[{}] Mermaid LSP starting", chrono::Utc::now().format("%H:%M:%S"));
+    if is_debug_enabled() {
+        eprintln!("Mermaid LSP starting...");
+        // Log current working directory
         if let Ok(cwd) = std::env::current_dir() {
-            let _ = writeln!(file, "[{}] LSP working directory: {:?}", chrono::Utc::now().format("%H:%M:%S"), cwd);
+            eprintln!("LSP working directory: {:?}", cwd);
         }
-        let _ = file.flush();
     }
 
     // Create JSON-RPC connection
@@ -329,17 +325,8 @@ fn get_code_actions(
     let uri = params.text_document.uri.to_string();
     let cursor = params.range.start;
 
-    eprintln!("DEBUG: get_code_actions called for URI: {}, cursor line: {}", uri, cursor.line);
-
-    // Also log to file
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/mermaid-lsp-debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "[{}] get_code_actions - URI: {}, line: {}", chrono::Utc::now().format("%H:%M:%S"), uri, cursor.line);
-        let _ = file.flush();
+    if is_debug_enabled() {
+        eprintln!("get_code_actions called for URI: {}, cursor line: {}", uri, cursor.line);
     }
 
     let content = documents
@@ -350,12 +337,16 @@ fn get_code_actions(
 
     // Count total mermaid blocks in the document - O(1) operation
     let total_blocks = count_mermaid_blocks(content);
-    eprintln!("DEBUG: Found {} mermaid blocks, cursor at line {}", total_blocks, cursor.line);
+    if is_debug_enabled() {
+        eprintln!("Found {} mermaid blocks, cursor at line {}", total_blocks, cursor.line);
+    }
 
     // For "Render All", we need to pre-compute due to LSP limitations
     // But we can optimize with caching and better user feedback
     if total_blocks > 1 {
-        eprintln!("DEBUG: PRE-RENDERING all {} diagrams (LSP limitation)", total_blocks);
+        if is_debug_enabled() {
+            eprintln!("Pre-rendering all {} diagrams (LSP limitation)", total_blocks);
+        }
 
         let edit = WorkspaceEdit {
             changes: Some(render_all_diagrams_content(&uri, content)?),
@@ -374,12 +365,16 @@ fn get_code_actions(
             data: None,
         });
     } else {
-        eprintln!("DEBUG: Not adding Render All (only {} blocks)", total_blocks);
+        if is_debug_enabled() {
+            eprintln!("Not adding Render All (only {} blocks)", total_blocks);
+        }
     }
 
     // For single diagrams, we can be more responsive
     if let Some(block) = locate_mermaid_source_block(content, &uri, &cursor) {
-        eprintln!("DEBUG: PRE-RENDERING single diagram (LSP limitation)");
+        if is_debug_enabled() {
+            eprintln!("PRE-RENDERING single diagram (LSP limitation)");
+        }
 
         let edit = WorkspaceEdit {
             changes: Some(create_render_edits(&uri, &block)?),
@@ -400,9 +395,13 @@ fn get_code_actions(
     }
 
     // Edit Mermaid action - this is cheap, just reading from file
-    eprintln!("DEBUG: Checking for rendered mermaid block...");
+    if is_debug_enabled() {
+        eprintln!("Checking for rendered mermaid block...");
+    }
     if let Some(block) = locate_rendered_mermaid_block(content, &uri, &cursor) {
-        eprintln!("DEBUG: Found rendered mermaid block, adding Edit action!");
+        if is_debug_enabled() {
+            eprintln!("Found rendered mermaid block, adding Edit action!");
+        }
         let edit = WorkspaceEdit {
             changes: Some(create_source_edits(&uri, &block)?),
             document_changes: None,
@@ -423,7 +422,9 @@ fn get_code_actions(
             },
         );
     } else {
-        eprintln!("DEBUG: No rendered mermaid block found for editing");
+        if is_debug_enabled() {
+            eprintln!("No rendered mermaid block found for editing");
+        }
     }
 
     Ok(actions)
@@ -527,50 +528,44 @@ fn locate_rendered_mermaid_block(
     uri: &str,
     cursor: &Position,
 ) -> Option<RenderedMermaidBlock> {
-    // Log immediately
-    eprintln!("DEBUG: locate_rendered_mermaid_block ENTRY - content length: {}", content.len());
+    if is_debug_enabled() {
+        eprintln!("locate_rendered_mermaid_block ENTRY - content length: {}", content.len());
+    }
 
     let lines: Vec<&str> = content.lines().collect();
-    eprintln!("DEBUG: locate_rendered_mermaid_block - parsed {} lines", lines.len());
+    if is_debug_enabled() {
+        eprintln!("locate_rendered_mermaid_block - parsed {} lines", lines.len());
+    }
 
     if lines.is_empty() {
-        eprintln!("DEBUG: locate_rendered_mermaid_block - EARLY RETURN: lines.is_empty()");
+        if is_debug_enabled() {
+            eprintln!("locate_rendered_mermaid_block - EARLY RETURN: lines.is_empty()");
+        }
         return None;
     }
 
     let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
-    eprintln!("DEBUG: locate_rendered_mermaid_block - cursor at line {}, total lines: {}", cursor_line, lines.len());
+    if is_debug_enabled() {
+        eprintln!("locate_rendered_mermaid_block - cursor at line {}, total lines: {}", cursor_line, lines.len());
+    }
 
-    // Log to file immediately
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/mermaid-lsp-debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "[{}] === locate_rendered_mermaid_block called ===", chrono::Utc::now().format("%H:%M:%S"));
-        let _ = writeln!(file, "[{}] Cursor line: {}, total lines: {}", chrono::Utc::now().format("%H:%M:%S"), cursor_line, lines.len());
-        let _ = file.flush();
+    if is_debug_enabled() {
+        eprintln!("=== locate_rendered_mermaid_block called ===");
+        eprintln!("Cursor line: {}, total lines: {}", cursor_line, lines.len());
     }
 
     // Find comment with mermaid source file reference - expand search range
     let search_start = cursor_line.saturating_sub(10);
     let search_end = (cursor_line + 5).min(lines.len() - 1);
-    eprintln!("DEBUG: Searching for mermaid comment in lines {}-{}", search_start, search_end);
+    if is_debug_enabled() {
+        eprintln!("Searching for mermaid comment in lines {}-{}", search_start, search_end);
+    }
 
     // Debug: print lines in search range
-    for i in search_start..=search_end {
-        if i < lines.len() {
-            eprintln!("DEBUG: Line {}: '{}'", i, lines[i]);
-            // Also log to file
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/mermaid-lsp-debug.log")
-            {
-                use std::io::Write;
-                let _ = writeln!(file, "[{}] Line {}: '{}'", chrono::Utc::now().format("%H:%M:%S"), i, lines[i]);
-                let _ = file.flush();
+    if is_debug_enabled() {
+        for i in search_start..=search_end {
+            if i < lines.len() {
+                eprintln!("Line {}: '{}'", i, lines[i]);
             }
         }
     }
@@ -580,7 +575,9 @@ fn locate_rendered_mermaid_block(
             let line = lines[i].trim();
             let is_comment = line.starts_with("<!-- mermaid-source-file:") && line.ends_with("-->");
             if is_comment {
-                eprintln!("DEBUG: Found mermaid comment at line {}: {}", i, line);
+                if is_debug_enabled() {
+                    eprintln!("Found mermaid comment at line {}: {}", i, line);
+                }
             }
             is_comment
         })?;
@@ -597,90 +594,61 @@ fn locate_rendered_mermaid_block(
             // source_file_path is relative to the document's parent
             if let Some(parent) = path.parent() {
                 let full_path = parent.join(source_file_path);
-                eprintln!("DEBUG: Document path: {:?}", path);
-                eprintln!("DEBUG: Document parent: {:?}", parent);
-                eprintln!("DEBUG: Relative source file: {}", source_file_path);
-                eprintln!("DEBUG: Resolved full path: {:?}", full_path);
-
-                // Log to file
-                if let Ok(mut file) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/mermaid-lsp-debug.log")
-                {
-                    use std::io::Write;
-                    let _ = writeln!(file, "[{}] Document path: {:?}", chrono::Utc::now().format("%H:%M:%S"), path);
-                    let _ = writeln!(file, "[{}] Document parent: {:?}", chrono::Utc::now().format("%H:%M:%S"), parent);
-                    let _ = writeln!(file, "[{}] Relative source file: {}", chrono::Utc::now().format("%H:%M:%S"), source_file_path);
-                    let _ = writeln!(file, "[{}] Resolved full path: {:?}", chrono::Utc::now().format("%H:%M:%S"), full_path);
-                    let _ = writeln!(file, "[{}] File exists: {}", chrono::Utc::now().format("%H:%M:%S"), full_path.exists());
-                    let _ = file.flush();
+                if is_debug_enabled() {
+                    eprintln!("Document path: {:?}", path);
+                    eprintln!("Document parent: {:?}", parent);
+                    eprintln!("Relative source file: {}", source_file_path);
+                    eprintln!("Resolved full path: {:?}", full_path);
                 }
 
                 full_path
             } else {
-                eprintln!("DEBUG: No parent directory for document, using relative path");
+                if is_debug_enabled() {
+                    eprintln!("No parent directory for document, using relative path");
+                }
                 Path::new(source_file_path).to_path_buf()
             }
         } else {
-            eprintln!("DEBUG: Could not parse URI to file path: {}", uri);
+            if is_debug_enabled() {
+                eprintln!("Could not parse URI to file path: {}", uri);
+            }
             Path::new(source_file_path).to_path_buf()
         }
     } else {
-        eprintln!("DEBUG: Could not parse URI: {}", uri);
+        if is_debug_enabled() {
+            eprintln!("Could not parse URI: {}", uri);
+        }
         Path::new(source_file_path).to_path_buf()
     };
 
-    eprintln!("DEBUG: Looking for source file at: {:?}", source_full_path);
-    eprintln!("DEBUG: File exists: {}", source_full_path.exists());
+    if is_debug_enabled() {
+        eprintln!("Looking for source file at: {:?}", source_full_path);
+        eprintln!("File exists: {}", source_full_path.exists());
+    }
 
     // Read the source from the file
     let code = match fs::read_to_string(&source_full_path) {
         Ok(content) => {
-            eprintln!("DEBUG: Successfully read source file ({} bytes)", content.len());
-            // Log to file
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/mermaid-lsp-debug.log")
-            {
-                use std::io::Write;
-                let _ = writeln!(file, "[{}] Successfully read source file ({} bytes)", chrono::Utc::now().format("%H:%M:%S"), content.len());
-                let _ = file.flush();
+            if is_debug_enabled() {
+                eprintln!("Successfully read source file ({} bytes)", content.len());
             }
             content
         }
         Err(e) => {
-            eprintln!("DEBUG: Failed to read source file: {}, attempting to find recent file...", e);
-            eprintln!("DEBUG: Error details: {:?}", e.kind());
-            // Log to file
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/mermaid-lsp-debug.log")
-            {
-                use std::io::Write;
-                let _ = writeln!(file, "[{}] Failed to read source file: {}, trying to find recent match", chrono::Utc::now().format("%H:%M:%S"), e);
-                let _ = writeln!(file, "[{}] File existence check: {}", chrono::Utc::now().format("%H:%M:%S"), source_full_path.exists());
-                let _ = writeln!(file, "[{}] Attempting to find most recent source file...", chrono::Utc::now().format("%H:%M:%S"));
-                let _ = file.flush();
+            if is_debug_enabled() {
+                eprintln!("Failed to read source file: {}, attempting to find recent file...", e);
+                eprintln!("Error details: {:?}", e.kind());
             }
 
             // Try to find the most recent matching file
             if let Some(recent_code) = find_most_recent_source_file(&source_full_path, &uri) {
-                eprintln!("DEBUG: Found recent source file, using that instead");
+                if is_debug_enabled() {
+                    eprintln!("Found recent source file, using that instead");
+                }
                 recent_code
             } else {
-                eprintln!("DEBUG: Could not find any recent source file");
-                // Log to file
-                if let Ok(mut file) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/tmp/mermaid-lsp-debug.log")
-                {
-                    use std::io::Write;
-                    let _ = writeln!(file, "[{}] FAILED: Could not find any recent source file", chrono::Utc::now().format("%H:%M:%S"));
-                    let _ = file.flush();
+                if is_debug_enabled() {
+                    eprintln!("Could not find any recent source file");
                 }
                 return None;
             }
@@ -701,19 +669,11 @@ fn locate_rendered_mermaid_block(
         source_line + 2
     };
 
-    eprintln!("DEBUG: Found rendered block - comment line {}, img line {}, end line {}", source_line, img_line, end_line);
-
-    // Log to file
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/mermaid-lsp-debug.log")
-    {
-        use std::io::Write;
-        let _ = writeln!(file, "[{}] SUCCESS: Found rendered block, returning Some", chrono::Utc::now().format("%H:%M:%S"));
-        let _ = file.flush();
+    if is_debug_enabled() {
+        eprintln!("Found rendered block - comment line {}, img line {}, end line {}", source_line, img_line, end_line);
     }
 
+    
     Some(RenderedMermaidBlock {
         code,
         start: Position {
@@ -765,8 +725,36 @@ fn create_render_edits(
         .map_err(|_| anyhow::anyhow!("Invalid file path"))?;
 
     // Create .mermaid directory in the document's parent directory
+    // SECURITY: Validate path stays within project boundaries
     let media_dir = if let Some(parent) = path.parent() {
-        parent.join(".mermaid")
+        let media_dir = parent.join(".mermaid");
+
+        // SECURITY: Ensure the resolved path stays within the parent directory
+        match media_dir.canonicalize() {
+            Ok(canonicalized) => {
+                if let Ok(parent_canonical) = parent.canonicalize() {
+                    if !canonicalized.starts_with(&parent_canonical) {
+                        return Err(anyhow!("Path traversal attempt detected: attempted to access {:?} outside of parent {:?}",
+                                        canonicalized, parent_canonical));
+                    }
+                }
+            }
+            Err(_) => {
+                // Path doesn't exist yet, validate the components
+                if !media_dir.to_string_lossy().contains("..") {
+                    // Additional validation: no parent directory references
+                    for component in media_dir.components() {
+                        if component == std::path::Component::ParentDir {
+                            return Err(anyhow!("Path traversal attempt detected: parent directory reference in path"));
+                        }
+                    }
+                } else {
+                    return Err(anyhow!("Path traversal attempt detected: path contains '..'"));
+                }
+            }
+        }
+
+        media_dir
     } else {
         Path::new(".mermaid").to_path_buf()
     };
@@ -789,11 +777,15 @@ fn create_render_edits(
 
     // Check if we have a cached version
     let svg_contents = if cache_path.exists() {
-        eprintln!("DEBUG: Using cached SVG for hash {:x}", code_hash);
+        if is_debug_enabled() {
+            eprintln!("Using cached SVG for hash {:x}", code_hash);
+        }
         fs::read_to_string(&cache_path)
             .map_err(|e| anyhow!("Failed to read cached SVG: {}", e))?
     } else {
-        eprintln!("DEBUG: Rendering new SVG (cache miss) for hash {:x}", code_hash);
+        if is_debug_enabled() {
+            eprintln!("Rendering new SVG (cache miss) for hash {:x}", code_hash);
+        }
         let contents = render_mermaid(&block.code)?;
 
         // Cache the result
@@ -851,8 +843,9 @@ fn create_render_edits(
         source_relative.trim(), svg_relative
     );
 
-    // Debug: Log what we're doing
-    eprintln!("DEBUG: Rendering with external source file v0.2.8");
+    if is_debug_enabled() {
+        eprintln!("Rendering with external source file");
+    }
 
     if !new_text.ends_with('\n') {
         new_text.push('\n');
@@ -988,7 +981,9 @@ fn execute_command(
     params: &ExecuteCommandParams,
     documents: &HashMap<String, String>,
 ) -> Result<WorkspaceEdit> {
-    eprintln!("DEBUG: Executing command: {}", params.command);
+    if is_debug_enabled() {
+        eprintln!("Executing command: {}", params.command);
+    }
 
     match params.command.as_str() {
         "mermaid.renderAllLightweight" => {
@@ -1003,7 +998,9 @@ fn execute_command(
                 .get(uri)
                 .ok_or_else(|| anyhow::anyhow!("Document not found: {}", uri))?;
 
-            eprintln!("DEBUG: Actually rendering all diagrams for {} (ON DEMAND)", uri);
+            if is_debug_enabled() {
+                eprintln!("Actually rendering all diagrams for {} (ON DEMAND)", uri);
+            }
             let changes = render_all_diagrams_content(uri, content)?;
 
             Ok(WorkspaceEdit {
@@ -1038,7 +1035,9 @@ fn execute_command(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing code"))?;
 
-            eprintln!("DEBUG: Rendering single diagram for {} (ON DEMAND)", uri);
+            if is_debug_enabled() {
+                eprintln!("Rendering single diagram for {} (ON DEMAND)", uri);
+            }
 
             // Create the block
             let block = MermaidSourceBlock {

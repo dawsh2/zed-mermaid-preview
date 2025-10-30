@@ -2,7 +2,7 @@
 name = "mermaid-lsp"
 version = "0.1.17"
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 description = "Mermaid language server"
 
 [[bin]]

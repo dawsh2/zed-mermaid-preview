@@ -64,7 +64,8 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
 }
 
 fn sanitize_svg(svg: &str) -> Result<String> {
-    if svg.contains("<script") {
+    // SECURITY: Case-insensitive script tag detection to prevent XSS
+    if svg.to_lowercase().contains("<script") {
         return Err(anyhow!("SVG contains <script> elements"));
     }
 
@@ -138,6 +139,21 @@ mod tests {
     fn rejects_scripts() {
         let svg = "<svg><script>alert('xss')</script></svg>";
         assert!(sanitize_svg(svg).is_err());
+    }
+
+    #[test]
+    fn rejects_scripts_case_insensitive() {
+        // Test various case combinations to ensure case-insensitive detection
+        let test_cases = vec![
+            "<svg><SCRIPT>alert('xss')</SCRIPT></svg>",
+            "<svg><Script>alert('xss')</Script></svg>",
+            "<svg><ScRiPt>alert('xss')</ScRiPt></svg>",
+            "<svg><script language='javascript'>alert('xss')</script></svg>",
+        ];
+
+        for svg in test_cases {
+            assert!(sanitize_svg(svg).is_err(), "Should reject case-insensitive script tags");
+        }
     }
 
     #[test]
