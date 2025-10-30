@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Result};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 use tempfile::tempdir;
 use which::which;
 
@@ -23,7 +27,7 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
     let default_config_path = temp_dir.path().join("config.json");
     fs::write(
         &default_config_path,
-        r#"{"flowchart":{"htmlLabels":false},"sequence":{"htmlLabels":false}}"#,
+        r#"{"flowchart":{"htmlLabels":false},"sequence":{"htmlLabels":false},"class":{"htmlLabels":false},"er":{"htmlLabels":false}}"#,
     )
     .map_err(|e| anyhow!("Failed to write Mermaid config: {}", e))?;
 
@@ -31,25 +35,20 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
         .map(PathBuf::from)
         .unwrap_or(default_config_path);
 
-    let mut command = Command::new(&cli_path);
-    command
-        .arg("-i")
-        .arg(&input_path)
-        .arg("-o")
-        .arg(&output_path)
-        .arg("--disableHtmlLabels")
-        .arg("-b")
-        .arg("transparent")
-        .arg("-c")
-        .arg(&config_path);
-
-    let output = command
-        .output()
-        .map_err(|e| anyhow!("Failed to execute mmdc: {}", e))?;
+    let output = run_mermaid_cli(&cli_path, &input_path, &output_path, &config_path, true)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("Mermaid CLI error: {}", stderr.trim()));
+        if stderr.contains("unknown option '--disableHtmlLabels'") {
+            let fallback =
+                run_mermaid_cli(&cli_path, &input_path, &output_path, &config_path, false)?;
+            if !fallback.status.success() {
+                let stderr = String::from_utf8_lossy(&fallback.stderr);
+                return Err(anyhow!("Mermaid CLI error: {}", stderr.trim()));
+            }
+        } else {
+            return Err(anyhow!("Mermaid CLI error: {}", stderr.trim()));
+        }
     }
 
     if !output_path.exists() {
@@ -77,6 +76,33 @@ fn sanitize_svg(svg: &str) -> Result<String> {
         .into_owned();
 
     Ok(sanitized)
+}
+
+fn run_mermaid_cli(
+    cli_path: &Path,
+    input_path: &Path,
+    output_path: &Path,
+    config_path: &Path,
+    disable_html_labels: bool,
+) -> Result<std::process::Output> {
+    let mut command = Command::new(cli_path);
+    command
+        .arg("-i")
+        .arg(input_path)
+        .arg("-o")
+        .arg(output_path)
+        .arg("-b")
+        .arg("transparent")
+        .arg("-c")
+        .arg(config_path);
+
+    if disable_html_labels {
+        command.arg("--disableHtmlLabels");
+    }
+
+    command
+        .output()
+        .map_err(|e| anyhow!("Failed to execute mmdc: {}", e))
 }
 
 fn mermaid_cli_path() -> Result<PathBuf> {
