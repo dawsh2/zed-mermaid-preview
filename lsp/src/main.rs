@@ -21,7 +21,17 @@ static SVG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn main() -> Result<()> {
     // Log to stderr for debugging
-    eprintln!("Mermaid LSP starting...");
+    eprintln!("Mermaid LSP starting with debug logging enabled...");
+
+    // Also try to log to a file
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/mermaid-lsp-debug.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "[{}] Mermaid LSP starting", chrono::Utc::now().format("%H:%M:%S"));
+    }
 
     // Create JSON-RPC connection
     let (connection, io_threads) = Connection::stdio();
@@ -232,6 +242,8 @@ fn get_code_actions(
     let uri = params.text_document.uri.to_string();
     let cursor = params.range.start;
 
+    eprintln!("DEBUG: get_code_actions called for URI: {}, cursor line: {}", uri, cursor.line);
+
     let content = documents
         .get(&uri)
         .ok_or_else(|| anyhow::anyhow!("Document not found: {}", uri))?;
@@ -290,7 +302,9 @@ fn get_code_actions(
     }
 
     // Edit Mermaid action - this is cheap, just reading from file
+    eprintln!("DEBUG: Checking for rendered mermaid block...");
     if let Some(block) = locate_rendered_mermaid_block(content, &uri, &cursor) {
+        eprintln!("DEBUG: Found rendered mermaid block, adding Edit action!");
         let edit = WorkspaceEdit {
             changes: Some(create_source_edits(&uri, &block)?),
             document_changes: None,
@@ -310,6 +324,8 @@ fn get_code_actions(
                 data: None,
             },
         );
+    } else {
+        eprintln!("DEBUG: No rendered mermaid block found for editing");
     }
 
     Ok(actions)
@@ -422,8 +438,8 @@ fn locate_rendered_mermaid_block(
     eprintln!("DEBUG: locate_rendered_mermaid_block - cursor at line {}, total lines: {}", cursor_line, lines.len());
 
     // Find comment with mermaid source file reference - expand search range
-    let search_start = cursor_line.saturating_sub(5);
-    let search_end = (cursor_line + 2).min(lines.len() - 1);
+    let search_start = cursor_line.saturating_sub(10);
+    let search_end = (cursor_line + 5).min(lines.len() - 1);
     eprintln!("DEBUG: Searching for mermaid comment in lines {}-{}", search_start, search_end);
 
     // Debug: print lines in search range
