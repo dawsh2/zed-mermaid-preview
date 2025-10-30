@@ -1,14 +1,22 @@
 use anyhow::{anyhow, Result};
+use base64::engine::{general_purpose::STANDARD, Engine as _};
 use lsp_server::{Connection, Message, Request, Response, ResponseError};
 use lsp_types::*;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::HashMap,
+    fs,
+    path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use url::Url;
 
 mod render;
 
 use crate::render::render_mermaid;
+
+static SVG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn main() -> Result<()> {
     // Log to stderr for debugging
@@ -249,45 +257,12 @@ fn get_code_actions(
     Ok(actions)
 }
 
-const MERMAID_STORAGE_ATTR: &str = "data-mermaid-source";
-const MERMAID_STORAGE_VERSION: u32 = 1;
+// Removed script-related constants since we're using details wrapper
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DocumentKind {
     Markdown,
     Mermaid,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum StoredDocumentKind {
-    Markdown,
-    Mermaid,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct StoredMermaidPayload {
-    version: u32,
-    kind: StoredDocumentKind,
-    code: String,
-}
-
-impl From<DocumentKind> for StoredDocumentKind {
-    fn from(kind: DocumentKind) -> Self {
-        match kind {
-            DocumentKind::Markdown => StoredDocumentKind::Markdown,
-            DocumentKind::Mermaid => StoredDocumentKind::Mermaid,
-        }
-    }
-}
-
-impl From<StoredDocumentKind> for DocumentKind {
-    fn from(kind: StoredDocumentKind) -> Self {
-        match kind {
-            StoredDocumentKind::Markdown => DocumentKind::Markdown,
-            StoredDocumentKind::Mermaid => DocumentKind::Mermaid,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -342,18 +317,11 @@ fn locate_mermaid_source_block(
     let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
     let (start_line, end_line) = find_mermaid_fence(&lines, cursor_line)?;
 
+    // Check if this block is already rendered (has source file comment before it)
     if start_line > 0 {
-        let mut i = start_line;
-        while i > 0 {
-            i -= 1;
-            let trimmed = lines[i].trim_start();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed.starts_with("<script") && trimmed.contains(MERMAID_STORAGE_ATTR) {
-                return None;
-            }
-            break;
+        let prev_line = lines[start_line - 1].trim();
+        if prev_line.starts_with("<!-- mermaid-source-file:") {
+            return None;
         }
     }
 
@@ -384,7 +352,7 @@ fn locate_mermaid_source_block(
 
 fn locate_rendered_mermaid_block(
     content: &str,
-    _uri: &str,
+    uri: &str,
     cursor: &Position,
 ) -> Option<RenderedMermaidBlock> {
     let lines: Vec<&str> = content.lines().collect();
@@ -393,36 +361,71 @@ fn locate_rendered_mermaid_block(
     }
 
     let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
-    let script_start = (0..=cursor_line).rev().find(|&i| {
-        let trimmed = lines[i].trim_start();
-        trimmed.starts_with("<script") && trimmed.contains(MERMAID_STORAGE_ATTR)
-    })?;
 
-    let (script_end, payload_raw) = extract_script_payload(&lines, script_start)?;
-    let payload = decode_stored_payload(&payload_raw)?;
-    let StoredMermaidPayload { code, kind, .. } = payload;
+    // Find comment with mermaid source file reference
+    let source_line = (0..=cursor_line)
+        .rev()
+        .find(|&i| {
+            let line = lines[i].trim();
+            line.starts_with("<!-- mermaid-source-file:") && line.ends_with("-->")
+        })?;
 
-    let mut end_line = script_end + 1;
-    if let Some(img_line) =
-        (script_end + 1..lines.len()).find(|&i| lines[i].contains("![Mermaid Diagram]("))
-    {
-        end_line = img_line + 1;
-        while end_line < lines.len() && lines[end_line].trim().is_empty() {
+    // Extract the source file path
+    let line = lines[source_line].trim();
+    let file_start = "<!-- mermaid-source-file:".len();
+    let file_end = line.len() - "-->".len();
+    let source_file_path = &line[file_start..file_end];
+
+    // Get the full path to the source file
+    let source_full_path = if let Ok(url) = Url::parse(uri) {
+        if let Some(path) = url.to_file_path().ok() {
+            if let Some(parent) = path.parent() {
+                parent.join(source_file_path)
+            } else {
+                Path::new(source_file_path).to_path_buf()
+            }
+        } else {
+            Path::new(source_file_path).to_path_buf()
+        }
+    } else {
+        Path::new(source_file_path).to_path_buf()
+    };
+
+    // Read the source from the file
+    let code = fs::read_to_string(&source_full_path)
+        .ok()?;
+
+    // Find the image reference (usually on the next non-empty line)
+    let mut img_line = source_line + 1;
+    while img_line < lines.len() && lines[img_line].trim().is_empty() {
+        img_line += 1;
+    }
+
+    // Find the end of the block (after the image)
+    let mut end_line = img_line + 1;
+    if img_line < lines.len() && lines[img_line].contains("![Mermaid Diagram](") {
+        while end_line < lines.len() && (lines[end_line].trim().is_empty() || end_line == img_line) {
             end_line += 1;
         }
+    } else {
+        end_line = source_line + 1;
     }
 
     Some(RenderedMermaidBlock {
         code,
         start: Position {
-            line: script_start as u32,
+            line: source_line as u32,
             character: 0,
         },
         end: Position {
             line: end_line.min(lines.len()) as u32,
             character: 0,
         },
-        kind: DocumentKind::from(kind),
+        kind: if is_mermaid_document(uri) {
+            DocumentKind::Mermaid
+        } else {
+            DocumentKind::Markdown
+        },
     })
 }
 
@@ -458,12 +461,19 @@ fn create_render_edits(
         .to_file_path()
         .map_err(|_| anyhow::anyhow!("Invalid file path"))?;
 
+    let counter = SVG_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let unique_id = format!("{}_{}", timestamp, counter);
+
     let svg_filename = match path.file_stem() {
         Some(stem) => {
             let stem_str = stem.to_string_lossy();
-            format!("{}_diagram.svg", stem_str)
+            format!("{}_diagram_{}.svg", stem_str, unique_id)
         }
-        None => "diagram.svg".to_string(),
+        None => format!("diagram_{}.svg", unique_id),
     };
 
     let svg_path = if let Some(parent) = path.parent() {
@@ -492,11 +502,35 @@ fn create_render_edits(
         None => svg_filename.clone(),
     };
 
-    let storage_json = encode_stored_payload(block)?;
+    
+    // Store the source in a separate file and leave only the image
+    let source_file_path = if let Some(parent) = path.parent() {
+        let base_name = path.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let source_filename = format!("{}_{}.mmd", base_name, unique_id);
+        parent.join(source_filename)
+    } else {
+        Path::new(&format!("{}.mmd", unique_id)).to_path_buf()
+    };
+
+    // Write the source to the .mmd file
+    fs::write(&source_file_path, &block.code)
+        .map_err(|e| anyhow!("Failed to write source file: {}", e))?;
+
+    // Add a reference to the source file
+    let source_relative = source_file_path
+        .strip_prefix(&path.parent().unwrap_or_else(|| Path::new(".")))
+        .unwrap_or(&source_file_path)
+        .to_string_lossy();
+
     let mut new_text = format!(
-        "<script type=\"application/json\" {}=\"true\">{}</script>\n\n![Mermaid Diagram]({})\n",
-        MERMAID_STORAGE_ATTR, storage_json, relative_svg_path
+        "<!-- mermaid-source-file:{} -->\n\n![Mermaid Diagram]({})\n",
+        source_relative, relative_svg_path
     );
+
+    // Debug: Log what we're doing
+    eprintln!("DEBUG: Rendering with external source file v0.2.6");
 
     if !new_text.ends_with('\n') {
         new_text.push('\n');
@@ -554,62 +588,4 @@ fn position_to_offset(pos: &Position, text: &str) -> usize {
     offset + pos.character as usize
 }
 
-fn encode_stored_payload(block: &MermaidSourceBlock) -> Result<String> {
-    let payload = StoredMermaidPayload {
-        version: MERMAID_STORAGE_VERSION,
-        kind: block.kind.into(),
-        code: block.code.clone(),
-    };
-
-    let mut json = serde_json::to_string(&payload)
-        .map_err(|e| anyhow!("Failed to serialize Mermaid source: {}", e))?;
-    json = json.replace("</script>", "<\\/script>");
-    Ok(json)
-}
-
-fn decode_stored_payload(raw: &str) -> Option<StoredMermaidPayload> {
-    let payload: StoredMermaidPayload = serde_json::from_str(raw).ok()?;
-    if payload.version != MERMAID_STORAGE_VERSION {
-        return None;
-    }
-    Some(payload)
-}
-
-fn extract_script_payload(lines: &[&str], script_start: usize) -> Option<(usize, String)> {
-    let first_line = *lines.get(script_start)?;
-    let mut segments: Vec<&str> = Vec::new();
-    let after_tag = first_line.splitn(2, '>').nth(1)?;
-
-    if let Some(idx) = after_tag.find("</script>") {
-        let content = &after_tag[..idx];
-        return Some((script_start, content.trim_matches('\n').to_string()));
-    }
-
-    if !after_tag.is_empty() {
-        segments.push(after_tag);
-    }
-
-    let mut script_end = script_start;
-
-    loop {
-        script_end += 1;
-        if script_end >= lines.len() {
-            return None;
-        }
-
-        let line = lines[script_end];
-        if let Some(idx) = line.find("</script>") {
-            segments.push(&line[..idx]);
-            break;
-        } else {
-            segments.push(line);
-        }
-    }
-
-    let mut payload = segments.join("\n");
-    while payload.ends_with('\n') {
-        payload.pop();
-    }
-
-    Some((script_end, payload))
-}
+// Removed script-related encode/decode functions - no longer needed with details wrapper

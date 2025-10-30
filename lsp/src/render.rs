@@ -27,7 +27,7 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
     let default_config_path = temp_dir.path().join("config.json");
     fs::write(
         &default_config_path,
-        r#"{"flowchart":{"htmlLabels":false},"sequence":{"htmlLabels":false},"class":{"htmlLabels":false},"er":{"htmlLabels":false}}"#,
+        r#"{"flowchart":{"htmlLabels":true},"sequence":{"htmlLabels":true},"class":{"htmlLabels":true},"er":{"htmlLabels":true}}"#,
     )
     .map_err(|e| anyhow!("Failed to write Mermaid config: {}", e))?;
 
@@ -35,7 +35,7 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
         .map(PathBuf::from)
         .unwrap_or(default_config_path);
 
-    let output = run_mermaid_cli(&cli_path, &input_path, &output_path, &config_path, true)?;
+    let output = run_mermaid_cli(&cli_path, &input_path, &output_path, &config_path, false)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -121,12 +121,12 @@ fn mermaid_cli_path() -> Result<PathBuf> {
 }
 
 static EVENT_HANDLER_ATTR: Lazy<Regex> = Lazy::new(|| {
-    Regex::new("(?is)\\s+on[a-z0-9_.:-]+\\s*=\\s*(?:\\\"[^\\\"]*\\\"|'[^']*')")
+    Regex::new("(?is)\\s+on[a-z0-9_.:-]+\\s*=\\s*(?:\"[^\"]*\"|'[^']*'|[^\\s>]+)")
         .expect("valid regex for event handler attributes")
 });
 
 static JAVASCRIPT_HREF_ATTR: Lazy<Regex> = Lazy::new(|| {
-    Regex::new("(?is)\\s+(?:xlink:)?href\\s*=\\s*(?:\\\"\\s*javascript:[^\\\"]*\\\"|'\\s*javascript:[^']*')")
+    Regex::new("(?is)\\s+(?:xlink:)?href\\s*=\\s*(?:\"\\s*javascript:[^\"]*\"|'\\s*javascript:[^']*')")
         .expect("valid regex for javascript href attributes")
 });
 
@@ -145,6 +145,40 @@ mod tests {
         let svg = "<svg><rect onclick=\"alert()\" width=\"10\" /></svg>";
         let sanitized = sanitize_svg(svg).unwrap();
         assert!(!sanitized.contains("onclick"));
+        assert!(!sanitized.contains("alert()"));
+        assert!(sanitized.contains("<rect"));
+    }
+
+    #[test]
+    fn removes_event_handlers_with_single_quotes() {
+        let svg = "<svg><rect onmouseover='doSomething()' width=\"10\" /></svg>";
+        let sanitized = sanitize_svg(svg).unwrap();
+        assert!(!sanitized.contains("onmouseover"));
+        assert!(!sanitized.contains("doSomething()"));
+    }
+
+    #[test]
+    fn removes_event_handlers_without_quotes() {
+        let svg = "<svg><rect onload=init() width=\"10\" /></svg>";
+        let sanitized = sanitize_svg(svg).unwrap();
+        assert!(!sanitized.contains("onload"));
+        assert!(!sanitized.contains("init()"));
+    }
+
+    #[test]
+    fn removes_javascript_hrefs() {
+        let svg = "<svg><a href=\"javascript:alert('xss')\">link</a></svg>";
+        let sanitized = sanitize_svg(svg).unwrap();
+        assert!(!sanitized.contains("javascript:"));
+        assert!(!sanitized.contains("alert"));
+    }
+
+    #[test]
+    fn removes_xlink_javascript_hrefs() {
+        let svg = "<svg><a xlink:href='javascript:malicious()'>link</a></svg>";
+        let sanitized = sanitize_svg(svg).unwrap();
+        assert!(!sanitized.contains("javascript:"));
+        assert!(!sanitized.contains("malicious"));
     }
 
     #[test]
@@ -152,6 +186,21 @@ mod tests {
         let svg = "<svg><foreignObject><div onclick=\"alert()\">Label</div></foreignObject></svg>";
         let sanitized = sanitize_svg(svg).unwrap();
         assert!(sanitized.contains("foreignObject"));
+        assert!(sanitized.contains("Label"));
         assert!(!sanitized.contains("onclick"));
+    }
+
+    #[test]
+    fn regression_broken_sanitize_doesnt_leave_malformed_markup() {
+        let svg = "<svg><rect onclick=\"alert('xss')\" width=\"10\" /></svg>";
+        let sanitized = sanitize_svg(svg).unwrap();
+        // Should not contain truncated attributes
+        assert!(!sanitized.contains("onclick=\"alert('xss')\""));
+        assert!(!sanitized.contains("alert('xss')\""));
+        assert!(!sanitized.contains("…")); // ellipsis from truncation
+        // Should be well-formed
+        assert!(sanitized.contains("<rect"));
+        assert!(sanitized.contains("width=\"10\""));
+        assert!(sanitized.ends_with("</svg>"));
     }
 }
