@@ -244,6 +244,16 @@ fn get_code_actions(
 
     eprintln!("DEBUG: get_code_actions called for URI: {}, cursor line: {}", uri, cursor.line);
 
+    // Also log to file
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/mermaid-lsp-debug.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "[{}] get_code_actions - URI: {}, line: {}", chrono::Utc::now().format("%H:%M:%S"), uri, cursor.line);
+    }
+
     let content = documents
         .get(&uri)
         .ok_or_else(|| anyhow::anyhow!("Document not found: {}", uri))?;
@@ -446,6 +456,15 @@ fn locate_rendered_mermaid_block(
     for i in search_start..=search_end {
         if i < lines.len() {
             eprintln!("DEBUG: Line {}: '{}'", i, lines[i]);
+            // Also log to file
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/mermaid-lsp-debug.log")
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "[{}] Line {}: '{}'", chrono::Utc::now().format("%H:%M:%S"), i, lines[i]);
+            }
         }
     }
 
