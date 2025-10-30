@@ -19,6 +19,71 @@ use crate::render::render_mermaid;
 
 static SVG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+// Find the most recent matching source file when the referenced file doesn't exist
+fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String> {
+    eprintln!("DEBUG: Searching for recent source file matching pattern");
+
+    // Extract the base filename pattern from the missing path
+    if let Some(file_name) = missing_path.file_name().and_then(|n| n.to_str()) {
+        // Extract base name and diagram number (e.g., "example_0" from "example_1761843815_0.mmd")
+        let parts: Vec<&str> = file_name.split('_').collect();
+        if parts.len() >= 3 {
+            let base_name = parts[0]; // e.g., "example"
+            let diagram_num = parts[parts.len() - 2]; // e.g., "0"
+            let extension = parts[parts.len() - 1]; // e.g., "mmd"
+
+            // Construct search pattern
+            let pattern = format!("{}_{}_{}", base_name, "*", diagram_num);
+
+            // Get the directory to search in
+            let search_dir = missing_path.parent().unwrap_or_else(|| Path::new(".mermaid"));
+
+            eprintln!("DEBUG: Searching in {:?} for pattern {}", search_dir, pattern);
+
+            // Find all matching files and get the most recent one
+            if let Ok(entries) = std::fs::read_dir(search_dir) {
+                let mut best_match: Option<(std::fs::DirEntry, std::time::SystemTime)> = None;
+
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        // Check if it matches our pattern
+                        if name.starts_with(&format!("{}_{}", base_name, diagram_num)) && name.ends_with(&format!(".{}", extension)) {
+                            // Get modification time
+                            if let Ok(metadata) = entry.metadata() {
+                                if let Ok(modified) = metadata.modified() {
+                                    match &best_match {
+                                        None => best_match = Some((entry, modified)),
+                                        Some((_, best_time)) => {
+                                            if modified > *best_time {
+                                                best_match = Some((entry, modified));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some((best_entry, _)) = best_match {
+                    let best_path = best_entry.path();
+                    eprintln!("DEBUG: Found most recent match: {:?}", best_path);
+
+                    // Try to read it
+                    if let Ok(content) = std::fs::read_to_string(&best_path) {
+                        eprintln!("DEBUG: Successfully read recent file ({} bytes)", content.len());
+                        return Some(content);
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!("DEBUG: No recent source file found");
+    None
+}
+
 fn main() -> Result<()> {
     // Log to stderr for debugging
     eprintln!("Mermaid LSP starting with debug logging enabled...");
@@ -509,7 +574,7 @@ fn locate_rendered_mermaid_block(
             content
         }
         Err(e) => {
-            eprintln!("DEBUG: Failed to read source file: {}", e);
+            eprintln!("DEBUG: Failed to read source file: {}, attempting to find recent file...", e);
             // Log to file
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
@@ -517,9 +582,17 @@ fn locate_rendered_mermaid_block(
                 .open("/tmp/mermaid-lsp-debug.log")
             {
                 use std::io::Write;
-                let _ = writeln!(file, "[{}] Failed to read source file: {}", chrono::Utc::now().format("%H:%M:%S"), e);
+                let _ = writeln!(file, "[{}] Failed to read source file: {}, trying to find recent match", chrono::Utc::now().format("%H:%M:%S"), e);
             }
-            return None;
+
+            // Try to find the most recent matching file
+            if let Some(recent_code) = find_most_recent_source_file(&source_full_path, &uri) {
+                eprintln!("DEBUG: Found recent source file, using that instead");
+                recent_code
+            } else {
+                eprintln!("DEBUG: Could not find any recent source file");
+                return None;
+            }
         }
     };
 
