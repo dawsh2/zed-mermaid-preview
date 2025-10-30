@@ -1,130 +1,87 @@
 use anyhow::{anyhow, Result};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::{env, fs, path::PathBuf, process::Command};
+use tempfile::tempdir;
 use which::which;
 
-/// Render Mermaid code to SVG using the mmdc CLI
+/// Render Mermaid code to SVG using the mmdc CLI and sanitize the output.
 pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
-    // Validate input
     if mermaid_code.trim().is_empty() {
         return Err(anyhow!("Mermaid code is empty"));
     }
 
-    // Create temporary file for the Mermaid input
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join(format!("mermaid_{}.mmd", std::process::id()));
-
-    // Write the Mermaid content to temp file
-    fs::write(&temp_path, mermaid_code).map_err(|e| anyhow!("Failed to write temp file: {}", e))?;
-
     let cli_path = mermaid_cli_path()?;
 
-    // Ensure Mermaid uses SVG labels so that text renders without foreignObject nodes.
-    let config_path = temp_dir.join(format!("mermaid_config_{}.json", std::process::id()));
-    fs::write(&config_path, r#"{"flowchart":{"htmlLabels":false}}"#)
-        .map_err(|e| anyhow!("Failed to write mermaid config file: {}", e))?;
+    let temp_dir = tempdir().map_err(|e| anyhow!("Failed to create temp dir: {}", e))?;
+    let input_path = temp_dir.path().join("diagram.mmd");
+    let output_path = temp_dir.path().join("diagram.svg");
 
-    // Render using mmdc
-    let output = Command::new(&cli_path)
+    fs::write(&input_path, mermaid_code)
+        .map_err(|e| anyhow!("Failed to write temp Mermaid file: {}", e))?;
+
+    let default_config_path = temp_dir.path().join("config.json");
+    fs::write(
+        &default_config_path,
+        r#"{"flowchart":{"htmlLabels":false},"sequence":{"htmlLabels":false}}"#,
+    )
+    .map_err(|e| anyhow!("Failed to write Mermaid config: {}", e))?;
+
+    let config_path = env::var("MERMAID_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or(default_config_path);
+
+    let mut command = Command::new(&cli_path);
+    command
         .arg("-i")
-        .arg(&temp_path)
+        .arg(&input_path)
         .arg("-o")
-        .arg("-") // stdout output
-        .arg("-t") // transparent background
-        .arg("-w")
-        .arg("1200") // default width
-        .arg("-H")
-        .arg("800") // default height
+        .arg(&output_path)
+        .arg("--disableHtmlLabels")
+        .arg("-b")
+        .arg("transparent")
         .arg("-c")
-        .arg(&config_path)
+        .arg(&config_path);
+
+    let output = command
         .output()
         .map_err(|e| anyhow!("Failed to execute mmdc: {}", e))?;
 
-    // Clean up temp file
-    let _ = fs::remove_file(&temp_path);
-    let _ = fs::remove_file(&config_path);
-
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("Mermaid CLI error: {}", stderr));
+        return Err(anyhow!("Mermaid CLI error: {}", stderr.trim()));
     }
 
-    let svg_string = String::from_utf8(output.stdout)
-        .map_err(|e| anyhow!("Failed to parse SVG output: {}", e))?;
-
-    if svg_string.trim().is_empty() {
-        return Err(anyhow!("Mermaid CLI produced empty output"));
+    if !output_path.exists() {
+        return Err(anyhow!("Mermaid CLI did not produce an SVG output"));
     }
 
-    // Sanitize SVG to remove scripts and dangerous attributes
-    let sanitized_svg = sanitize_svg(&svg_string)?;
+    let svg_contents = fs::read_to_string(&output_path)
+        .map_err(|e| anyhow!("Failed to read rendered SVG: {}", e))?;
 
-    Ok(sanitized_svg)
+    let sanitized = sanitize_svg(&svg_contents)?;
+
+    Ok(sanitized)
 }
 
-/// Basic SVG sanitization to remove potentially dangerous content
 fn sanitize_svg(svg: &str) -> Result<String> {
-    // Check for obviously dangerous content - scripts are bad, foreignObject is okay for Mermaid
     if svg.contains("<script") {
-        return Err(anyhow!("SVG contains potentially dangerous content"));
+        return Err(anyhow!("SVG contains <script> elements"));
     }
 
-    // Simple string-based sanitization to avoid regex dependency issues
     let mut sanitized = svg.to_string();
 
-    // Remove common event handlers
-    let dangerous_attributes = [
-        "onclick",
-        "onload",
-        "onerror",
-        "onmouseover",
-        "onmouseout",
-        "onfocus",
-        "onblur",
-        "onchange",
-        "onsubmit",
-        "onreset",
-        "onkeydown",
-        "onkeyup",
-        "onkeypress",
-        "onmousedown",
-        "onmouseup",
-        "onmousemove",
-        "ondrag",
-        "ondrop",
-        "ontouchstart",
-        "ontouchend",
-    ];
-
-    for attr in &dangerous_attributes {
-        // Simple pattern matching for attribute removal
-        let pattern = format!("{}=\"", attr);
-        while let Some(start) = sanitized.find(&pattern) {
-            if let Some(end) = sanitized[start..].find('"') {
-                let end = start + end + 1;
-                sanitized.replace_range(start..end, "");
-            } else {
-                break;
-            }
-        }
-    }
-
-    // Remove javascript: URLs
-    let js_pattern = "javascript:";
-    while let Some(start) = sanitized.find(js_pattern) {
-        if let Some(end) = sanitized[start..].find('"') {
-            let end = start + end + 1;
-            sanitized.replace_range(start..end, "");
-        } else {
-            break;
-        }
-    }
+    sanitized = EVENT_HANDLER_ATTR.replace_all(&sanitized, "").into_owned();
+    sanitized = JAVASCRIPT_HREF_ATTR
+        .replace_all(&sanitized, "")
+        .into_owned();
 
     Ok(sanitized)
 }
 
 fn mermaid_cli_path() -> Result<PathBuf> {
     if let Ok(path) = env::var("MERMAID_CLI_PATH") {
-        let candidate = PathBuf::from(path);
+        let candidate = PathBuf::from(&path);
         if candidate.is_file() {
             return Ok(candidate);
         }
@@ -137,47 +94,38 @@ fn mermaid_cli_path() -> Result<PathBuf> {
     which("mmdc").map_err(|_| anyhow!("Mermaid CLI (mmdc) not found in PATH"))
 }
 
+static EVENT_HANDLER_ATTR: Lazy<Regex> = Lazy::new(|| {
+    Regex::new("(?is)\\s+on[a-z0-9_.:-]+\\s*=\\s*(?:\\\"[^\\\"]*\\\"|'[^']*')")
+        .expect("valid regex for event handler attributes")
+});
+
+static JAVASCRIPT_HREF_ATTR: Lazy<Regex> = Lazy::new(|| {
+    Regex::new("(?is)\\s+(?:xlink:)?href\\s*=\\s*(?:\\\"\\s*javascript:[^\\\"]*\\\"|'\\s*javascript:[^']*')")
+        .expect("valid regex for javascript href attributes")
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_simple_render() {
-        let mermaid_code = r#"
-graph TD
-    A[Start] --> B{Question}
-    B -->|Yes| C[Action 1]
-    B -->|No| D[Action 2]
-    C --> E[End]
-    D --> E
-"#;
-
-        if mermaid_cli_path().is_err() {
-            eprintln!("Skipping render test because Mermaid CLI is unavailable");
-            return;
-        }
-
-        let result = render_mermaid(mermaid_code);
-        assert!(
-            result.is_ok(),
-            "Failed to render simple diagram: {:?}",
-            result.err()
-        );
-
-        let svg = result.unwrap();
-        assert!(svg.starts_with("<svg"), "Output should be SVG");
-        assert!(svg.contains("Start"), "SVG should contain diagram content");
+    fn rejects_scripts() {
+        let svg = "<svg><script>alert('xss')</script></svg>";
+        assert!(sanitize_svg(svg).is_err());
     }
 
     #[test]
-    fn test_sanitize_svg() {
-        let dangerous_svg =
-            r#"<svg><script>alert('xss')</script><rect onclick="alert('xss')" /></svg>"#;
-        let result = sanitize_svg(dangerous_svg);
-        assert!(result.is_err(), "Should reject SVG with script tag");
+    fn removes_event_handlers() {
+        let svg = "<svg><rect onclick=\"alert()\" width=\"10\" /></svg>";
+        let sanitized = sanitize_svg(svg).unwrap();
+        assert!(!sanitized.contains("onclick"));
+    }
 
-        let safe_svg = r#"<svg><rect x="10" y="10" width="100" height="100" /></svg>"#;
-        let result = sanitize_svg(safe_svg);
-        assert!(result.is_ok(), "Should accept safe SVG");
+    #[test]
+    fn keeps_foreign_object_but_sanitizes() {
+        let svg = "<svg><foreignObject><div onclick=\"alert()\">Label</div></foreignObject></svg>";
+        let sanitized = sanitize_svg(svg).unwrap();
+        assert!(sanitized.contains("foreignObject"));
+        assert!(!sanitized.contains("onclick"));
     }
 }

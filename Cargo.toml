@@ -3,7 +3,7 @@ members = ["lsp"]
 
 [package]
 name = "mermaid_preview"
-version = "0.1.0"
+version = "0.1.5"
 edition = "2021"
 
 [lib]

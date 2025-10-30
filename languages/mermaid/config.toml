@@ -1,0 +1,6 @@
+name = "Mermaid"
+grammar = "markdown"
+path_suffixes = ["mmd", "mermaid"]
+line_comments = ["%% "]
+tab_size = 2
+code_fence_block_name = "mermaid"

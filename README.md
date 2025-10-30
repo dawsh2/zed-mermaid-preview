@@ -136,9 +136,10 @@ The extension uses a Language Server Protocol (LSP) approach:
 2. When you select Mermaid code and use "Render Mermaid Diagram", the LSP:
    - Extracts the Mermaid code
    - Calls the Mermaid CLI (`mmdc`) to convert it to SVG (respecting `MERMAID_CLI_PATH` when set)
-   - Writes the SVG file to disk
-   - Replaces the code block with markdown image syntax
-3. Zed's markdown preview renders the SVG image inline with perfect scaling.
+   - Writes the SVG file next to the source document
+   - Stores the Mermaid source in a hidden `<script type="application/json" data-mermaid-source>` block so "Edit Mermaid Source" can round-trip the code without showing it in preview
+   - Inserts a Markdown image that points at the newly generated SVG (relative to the document)
+3. Zed's markdown preview renders the SVG inline with the expected labels and styling.
 
 ### Shipping the language server
 
