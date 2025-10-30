@@ -503,8 +503,25 @@ fn locate_rendered_mermaid_block(
     eprintln!("DEBUG: Looking for source file at: {:?}", source_full_path);
 
     // Read the source from the file
-    let code = fs::read_to_string(&source_full_path)
-        .ok()?;
+    let code = match fs::read_to_string(&source_full_path) {
+        Ok(content) => {
+            eprintln!("DEBUG: Successfully read source file ({} bytes)", content.len());
+            content
+        }
+        Err(e) => {
+            eprintln!("DEBUG: Failed to read source file: {}", e);
+            // Log to file
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/mermaid-lsp-debug.log")
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "[{}] Failed to read source file: {}", chrono::Utc::now().format("%H:%M:%S"), e);
+            }
+            return None;
+        }
+    };
 
     // Find the image reference (usually on the next non-empty line)
     let mut img_line = source_line + 1;
@@ -521,6 +538,16 @@ fn locate_rendered_mermaid_block(
     };
 
     eprintln!("DEBUG: Found rendered block - comment line {}, img line {}, end line {}", source_line, img_line, end_line);
+
+    // Log to file
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/mermaid-lsp-debug.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "[{}] SUCCESS: Found rendered block, returning Some", chrono::Utc::now().format("%H:%M:%S"));
+    }
 
     Some(RenderedMermaidBlock {
         code,
