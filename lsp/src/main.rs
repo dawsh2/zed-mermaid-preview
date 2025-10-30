@@ -98,8 +98,8 @@ fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String
 
 fn main() -> Result<()> {
     // Log to stderr for debugging
-    eprintln!("Mermaid LSP v0.1.16 starting with debug logging enabled...");
-    eprintln!("DEBUG: ========== BINARY v0.1.16-enhanced-debug-11:20 ==========");
+    eprintln!("Mermaid LSP v0.1.17 starting with debug logging enabled...");
+    eprintln!("DEBUG: ========== BINARY v0.1.17-enhanced-debug-11:35 ==========");
 
     // Log current working directory
     if let Ok(cwd) = std::env::current_dir() {
@@ -847,7 +847,7 @@ fn create_render_edits(
     let svg_relative = svg_path_buf.to_string_lossy();
 
     let mut new_text = format!(
-        "<!-- mermaid-source-file:{} -->\n\n![Mermaid Diagram]({})\n",
+        "<!-- mermaid-source-file:{}-->\n\n![Mermaid Diagram]({})\n",
         source_relative.trim(), svg_relative
     );
 
