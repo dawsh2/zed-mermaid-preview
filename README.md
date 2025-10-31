@@ -133,6 +133,24 @@ cp target/release/mermaid-lsp ~/Library/Application\ Support/Zed/extensions/work
 # Users auto-update!
 ```
 
+## Security
+
+This extension executes the `mmdc` command-line tool to render diagrams. Security considerations:
+
+- ✅ **Path Traversal Protection**: Validates all file paths stay within project boundaries
+- ✅ **No Command Injection**: Uses safe command execution (no shell interpolation)
+- ✅ **Script Tag Removal**: Rejects SVGs containing `<script>` tags
+- ✅ **Regex DoS Protection**: Uses efficient patterns to prevent catastrophic backtracking
+- ✅ **Automatic Cleanup**: Removes orphaned files to prevent disk space accumulation
+
+**Important**: This extension assumes diagram code comes from trusted sources (your own files). If processing untrusted Mermaid diagrams, be aware that malicious syntax could potentially exploit vulnerabilities in the `mmdc` tool itself.
+
+For complete security documentation, see [SECURITY.md](SECURITY.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
+
 ## License
 
 MIT

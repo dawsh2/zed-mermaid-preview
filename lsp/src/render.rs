@@ -19,6 +19,23 @@ static FOREIGN_OBJECT_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// Render Mermaid code to SVG using mmdc and sanitize the output.
+///
+/// # Security Considerations
+///
+/// This function assumes the Mermaid code comes from a trusted source (user's own files).
+/// It provides the following protections:
+///
+/// - **No Command Injection**: Uses `Command::new()` with explicit arguments, not shell execution
+/// - **Isolated Execution**: Writes to temporary files in system temp directory
+/// - **Script Tag Removal**: Rejects SVGs containing `<script>` tags
+/// - **ForeignObject Sanitization**: Converts foreignObject elements to native SVG text
+///
+/// However, it cannot protect against:
+/// - Vulnerabilities in the mmdc binary itself
+/// - Malicious Mermaid syntax that exploits mmdc parser bugs
+/// - Resource exhaustion from extremely complex diagrams
+///
+/// See SECURITY.md for complete security documentation.
 pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
     if mermaid_code.trim().is_empty() {
         return Err(anyhow!("Mermaid code is empty"));
