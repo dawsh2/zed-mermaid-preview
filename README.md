@@ -1,4 +1,5 @@
 # Mermaid Preview for Zed
+<img width="1920" height="1080" alt="Screenshot 2025-10-31 at 12 58 05 PM" src="https://github.com/user-attachments/assets/af814afc-6f0f-44a2-8dd4-30518f103fc5" />
 
 Render Mermaid diagrams as SVG images directly in your Markdown files.
 
