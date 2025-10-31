@@ -20,18 +20,23 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
     let temp_dir = tempdir().map_err(|e| anyhow!("Failed to create temp dir: {}", e))?;
     let input_path = temp_dir.path().join("diagram.mmd");
     let output_path = temp_dir.path().join("diagram.svg");
+    let config_path = temp_dir.path().join("mermaid-config.json");
 
+    // Write mermaid code and config
     fs::write(&input_path, mermaid_code)
         .map_err(|e| anyhow!("Failed to write temp Mermaid file: {}", e))?;
 
-    // Run mmdc with htmlLabels disabled
+    fs::write(&config_path, include_str!("mermaid-config.json"))
+        .map_err(|e| anyhow!("Failed to write temp config file: {}", e))?;
+
+    // Run mmdc with configuration file for htmlLabels: false
     let output = Command::new(&mmdc_path)
         .arg("-i")
         .arg(&input_path)
         .arg("-o")
         .arg(&output_path)
-        .arg("-t")
-        .arg("default")
+        .arg("-c")
+        .arg(&config_path)
         .arg("-b")
         .arg("white")
         .stdout(Stdio::piped())
