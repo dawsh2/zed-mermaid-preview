@@ -169,8 +169,6 @@ fn main() -> Result<()> {
             commands: vec![
                 "mermaid.renderAllLightweight".to_string(),
                 "mermaid.renderSingle".to_string(),
-                "mermaid.editAllSources".to_string(),
-                "mermaid.editSingleSource".to_string(),
             ],
             work_done_progress_options: WorkDoneProgressOptions {
                 work_done_progress: None,
@@ -361,7 +359,7 @@ fn handle_notification(
 fn get_code_actions(
     params: &CodeActionParams,
     documents: &HashMap<String, String>,
-    _connection: &Connection,
+    connection: &Connection,
 ) -> Result<Vec<CodeAction>> {
     let uri = params.text_document.uri.to_string();
     let cursor = params.range.start;
@@ -378,20 +376,23 @@ fn get_code_actions(
     let total_blocks = count_mermaid_blocks(content);
     debug!("Found {} mermaid blocks, cursor at line {}", total_blocks, cursor.line);
 
-    // Render All - use Command for on-demand execution (no pre-rendering!)
+    // For "Render All", we need to pre-compute due to LSP limitations
+    // But we can optimize with caching and better user feedback
     if total_blocks > 1 {
-        debug!("Adding Render All command for {} diagrams", total_blocks);
+        debug!("Pre-rendering all {} diagrams (LSP limitation)", total_blocks);
+
+        let edit = WorkspaceEdit {
+            changes: Some(render_all_diagrams_content(&uri, content, Some(connection))?),
+            document_changes: None,
+            change_annotations: None,
+        };
 
         actions.push(CodeAction {
             title: format!("Render All {} Mermaid Diagrams", total_blocks),
             kind: Some(CodeActionKind::REFACTOR_REWRITE),
             diagnostics: None,
-            edit: None,
-            command: Some(Command {
-                title: format!("Render All {} Mermaid Diagrams", total_blocks),
-                command: "mermaid.renderAllLightweight".to_string(),
-                arguments: Some(vec![json!({"uri": uri})]),
-            }),
+            edit: Some(edit),
+            command: None,
             is_preferred: Some(true),
             disabled: None,
             data: None,
@@ -400,46 +401,22 @@ fn get_code_actions(
         debug!("Not adding Render All (only {} blocks)", total_blocks);
     }
 
-    // Edit All - only show if there are multiple rendered blocks
-    let rendered_count = count_rendered_blocks(content);
-    if rendered_count > 1 {
-        debug!("Adding Edit All command for {} rendered diagrams", rendered_count);
-
-        actions.push(CodeAction {
-            title: format!("Edit All {} Mermaid Sources", rendered_count),
-            kind: Some(CodeActionKind::REFACTOR_REWRITE),
-            diagnostics: None,
-            edit: None,
-            command: Some(Command {
-                title: format!("Edit All {} Mermaid Sources", rendered_count),
-                command: "mermaid.editAllSources".to_string(),
-                arguments: Some(vec![json!({"uri": uri})]),
-            }),
-            is_preferred: Some(false),
-            disabled: None,
-            data: None,
-        });
-    }
-
-    // Render Single - use Command for on-demand execution (no pre-rendering!)
+    // For single diagrams, we can be more responsive
     if let Some(block) = locate_mermaid_source_block(content, &uri, &cursor) {
-        debug!("Adding Render Single command");
+        debug!("PRE-RENDERING single diagram (LSP limitation)");
+
+        let edit = WorkspaceEdit {
+            changes: Some(create_render_edits(&uri, &block)?),
+            document_changes: None,
+            change_annotations: None,
+        };
 
         actions.push(CodeAction {
             title: "Render Mermaid Diagram".to_string(),
             kind: Some(CodeActionKind::REFACTOR_REWRITE),
             diagnostics: None,
-            edit: None,
-            command: Some(Command {
-                title: "Render Mermaid Diagram".to_string(),
-                command: "mermaid.renderSingle".to_string(),
-                arguments: Some(vec![json!({
-                    "uri": uri,
-                    "code": block.code,
-                    "startLine": block.start.line,
-                    "endLine": block.end.line,
-                })]),
-            }),
+            edit: Some(edit),
+            command: None,
             is_preferred: Some(total_blocks <= 1),
             disabled: None,
             data: None,
@@ -462,7 +439,12 @@ fn get_code_actions(
         if is_on_comment {
             // Now find the rendered block for this comment
             if let Some(block) = locate_rendered_mermaid_block(content, &uri, &cursor) {
-                debug!("Found rendered mermaid block, adding Edit Single action!");
+                debug!("Found rendered mermaid block, adding Edit action!");
+                let edit = WorkspaceEdit {
+                    changes: Some(create_source_edits(&uri, &block)?),
+                    document_changes: None,
+                    change_annotations: None,
+                };
 
                 actions.insert(
                     0,
@@ -470,17 +452,8 @@ fn get_code_actions(
                         title: "Edit Mermaid Source".to_string(),
                         kind: Some(CodeActionKind::REFACTOR_REWRITE),
                         diagnostics: None,
-                        edit: None,
-                        command: Some(Command {
-                            title: "Edit Mermaid Source".to_string(),
-                            command: "mermaid.editSingleSource".to_string(),
-                            arguments: Some(vec![json!({
-                                "uri": uri,
-                                "code": block.code,
-                                "startLine": block.start.line,
-                                "endLine": block.end.line,
-                            })]),
-                        }),
+                        edit: Some(edit),
+                        command: None,
                         is_preferred: Some(true),
                         disabled: None,
                         data: None,
@@ -1040,19 +1013,6 @@ fn count_mermaid_blocks(content: &str) -> usize {
     count
 }
 
-fn count_rendered_blocks(content: &str) -> usize {
-    let lines: Vec<&str> = content.lines().collect();
-    let mut count = 0;
-
-    for line in lines {
-        if line.trim().starts_with(MERMAID_SOURCE_COMMENT_PREFIX) {
-            count += 1;
-        }
-    }
-
-    count
-}
-
 fn render_all_diagrams_content(
     uri: &str,
     content: &str,
@@ -1132,89 +1092,6 @@ fn render_all_diagrams_content(
     Ok(all_edits)
 }
 
-fn edit_all_sources_content(
-    uri: &str,
-    content: &str,
-) -> Result<HashMap<Url, Vec<TextEdit>>> {
-    let lines: Vec<&str> = content.lines().collect();
-    let mut all_edits: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    let mut i = 0;
-
-    debug!("Searching for rendered blocks to edit...");
-
-    while i < lines.len() {
-        let line = lines[i].trim();
-
-        // Look for mermaid source comment lines
-        if line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) && line.ends_with(MERMAID_SOURCE_COMMENT_SUFFIX) {
-            debug!("Found rendered block at line {}", i);
-
-            // Find the end of the rendered block (next blank line or mermaid fence)
-            let mut end = i + 1;
-            while end < lines.len() {
-                let next_line = lines[end].trim();
-                if next_line.is_empty() || next_line.starts_with("```mermaid") || next_line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) {
-                    break;
-                }
-                end += 1;
-            }
-
-            // Extract the source file path from comment
-            let start_pos = line.find(MERMAID_SOURCE_COMMENT_PREFIX).unwrap() + MERMAID_SOURCE_COMMENT_PREFIX.len();
-            let end_pos = line.len() - MERMAID_SOURCE_COMMENT_SUFFIX.len();
-            let source_file = &line[start_pos..end_pos];
-
-            debug!("Loading source from: {}", source_file);
-
-            // Read the source file
-            if let Ok(source_url) = Url::parse(uri) {
-                if let Ok(doc_path) = source_url.to_file_path() {
-                    if let Some(parent) = doc_path.parent() {
-                        let source_path = parent.join(source_file);
-                        if let Ok(source_code) = std::fs::read_to_string(&source_path) {
-                            // Create the block
-                            let block = RenderedMermaidBlock {
-                                code: source_code,
-                                start: Position {
-                                    line: i as u32,
-                                    character: 0,
-                                },
-                                end: Position {
-                                    line: end as u32,
-                                    character: 0,
-                                },
-                                kind: DocumentKind::Markdown,
-                            };
-
-                            match create_source_edits(uri, &block) {
-                                Ok(mut edits) => {
-                                    if let Some((url, mut text_edits)) = edits.drain().next() {
-                                        if let Some(existing_edits) = all_edits.get_mut(&url) {
-                                            existing_edits.append(&mut text_edits);
-                                        } else {
-                                            all_edits.insert(url, text_edits);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("Failed to create source edits for line {}: {}", i + 1, e);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            i = end;
-        } else {
-            i += 1;
-        }
-    }
-
-    debug!("Found {} sets of edits across all rendered blocks", all_edits.len());
-    Ok(all_edits)
-}
-
 fn execute_command(
     params: &ExecuteCommandParams,
     documents: &HashMap<String, String>,
@@ -1287,77 +1164,6 @@ fn execute_command(
             };
 
             let changes = create_render_edits(uri, &block)?;
-
-            Ok(WorkspaceEdit {
-                changes: Some(changes),
-                document_changes: None,
-                change_annotations: None,
-            })
-        }
-        "mermaid.editSingleSource" => {
-            // Get parameters from command arguments
-            let args = params.arguments
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("No arguments provided"))?;
-
-            let uri = args
-                .get("uri")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing URI argument"))?;
-
-            let start_line = args
-                .get("startLine")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| anyhow::anyhow!("Missing startLine"))? as u32;
-
-            let end_line = args
-                .get("endLine")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| anyhow::anyhow!("Missing endLine"))? as u32;
-
-            let code = args
-                .get("code")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing code"))?;
-
-            debug!("Editing single mermaid source for {} (ON DEMAND)", uri);
-
-            // Create the block
-            let block = RenderedMermaidBlock {
-                code: code.to_string(),
-                start: Position {
-                    line: start_line,
-                    character: 0,
-                },
-                end: Position {
-                    line: end_line,
-                    character: 0,
-                },
-                kind: DocumentKind::Markdown,
-            };
-
-            let changes = create_source_edits(uri, &block)?;
-
-            Ok(WorkspaceEdit {
-                changes: Some(changes),
-                document_changes: None,
-                change_annotations: None,
-            })
-        }
-        "mermaid.editAllSources" => {
-            // Get URI from command arguments
-            let uri = params.arguments
-                .first()
-                .and_then(|arg| arg.get("uri"))
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Missing URI argument"))?;
-
-            let content = documents
-                .get(uri)
-                .ok_or_else(|| anyhow::anyhow!("Document not found: {}", uri))?;
-
-            debug!("Editing all mermaid sources for {} (ON DEMAND)", uri);
-            let changes = edit_all_sources_content(uri, content)?;
 
             Ok(WorkspaceEdit {
                 changes: Some(changes),
