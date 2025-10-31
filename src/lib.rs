@@ -69,12 +69,12 @@ impl MermaidPreviewExtension {
         let extension_dir = env::current_dir()
             .map_err(|error| format!("unable to determine extension directory: {error}"))?;
 
-        // For development, check local binaries first
+        // Check for bundled/local binary first (no download required)
         if let Some(path) = Self::candidate_paths(&extension_dir, lsp_binary_name)
             .into_iter()
             .find(|candidate| candidate.is_file())
         {
-            eprintln!("Using local development binary: {}", path.display());
+            eprintln!("✅ Using bundled LSP binary: {}", path.display());
             return Self::finalize_path(language_server_id, path, &mut self.lsp_path);
         }
 

@@ -5,12 +5,13 @@ Render Mermaid diagrams as SVG images directly in your Markdown files.
 
 ## Features
 
-- ⚡ **Bulk rendering** - Render all diagrams at once with "Render All X Diagrams"
+- ⚡ **Instant startup** - Bundled LSP binary means no downloads on first use
 - 🎨 **Clean preview** - Shows only rendered diagrams, no source code in preview
 - 📝 **Editable source** - Source saved to separate `.mmd` files for easy editing
 - 🔒 **Secure** - SVG output sanitized, files written only to project directory
 - 🎯 **Perfectly centered labels** - Native SVG text rendering with proper label positioning
 - 🚀 **Fast** - Works with any Mermaid diagram type
+- ⚡ **Bulk rendering** - Render all diagrams at once with "Render All X Diagrams"
 
 ## Requirements
 
@@ -69,10 +70,14 @@ document_diagram_0.mmd   # Source code (editable)
 
 See [`example.md`](example.md) for various diagram types and complexity levels.
 
+## Performance
+
+The extension bundles the LSP binary (~3.5MB) for **instant startup** with no downloads required. Previous versions needed to download the binary on first use, which could cause initial delays.
+
 ## Development
 
 ```bash
-# Build
+# Build (includes bundled LSP binary)
 ./scripts/build.sh
 
 # Test
