@@ -401,6 +401,29 @@ fn get_code_actions(
         debug!("Not adding Render All (only {} blocks)", total_blocks);
     }
 
+    // Edit All - only show if there are multiple rendered blocks
+    let rendered_count = count_rendered_blocks(content);
+    if rendered_count > 1 {
+        debug!("Pre-computing Edit All for {} rendered diagrams", rendered_count);
+
+        let edit = WorkspaceEdit {
+            changes: Some(edit_all_sources_content(&uri, content)?),
+            document_changes: None,
+            change_annotations: None,
+        };
+
+        actions.push(CodeAction {
+            title: format!("Edit All {} Mermaid Sources", rendered_count),
+            kind: Some(CodeActionKind::REFACTOR_REWRITE),
+            diagnostics: None,
+            edit: Some(edit),
+            command: None,
+            is_preferred: Some(false),
+            disabled: None,
+            data: None,
+        });
+    }
+
     // For single diagrams, we can be more responsive
     if let Some(block) = locate_mermaid_source_block(content, &uri, &cursor) {
         debug!("PRE-RENDERING single diagram (LSP limitation)");
@@ -1011,6 +1034,102 @@ fn count_mermaid_blocks(content: &str) -> usize {
     }
 
     count
+}
+
+fn count_rendered_blocks(content: &str) -> usize {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut count = 0;
+
+    for line in lines {
+        if line.trim().starts_with(MERMAID_SOURCE_COMMENT_PREFIX) {
+            count += 1;
+        }
+    }
+
+    count
+}
+
+fn edit_all_sources_content(
+    uri: &str,
+    content: &str,
+) -> Result<HashMap<Url, Vec<TextEdit>>> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut all_edits: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    let mut i = 0;
+
+    debug!("Searching for rendered blocks to edit...");
+
+    while i < lines.len() {
+        let line = lines[i].trim();
+
+        // Look for mermaid source comment lines
+        if line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) && line.ends_with(MERMAID_SOURCE_COMMENT_SUFFIX) {
+            debug!("Found rendered block at line {}", i);
+
+            // Find the end of the rendered block (next blank line or mermaid fence)
+            let mut end = i + 1;
+            while end < lines.len() {
+                let next_line = lines[end].trim();
+                if next_line.is_empty() || next_line.starts_with("```mermaid") || next_line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) {
+                    break;
+                }
+                end += 1;
+            }
+
+            // Extract the source file path from comment
+            let start_pos = line.find(MERMAID_SOURCE_COMMENT_PREFIX).unwrap() + MERMAID_SOURCE_COMMENT_PREFIX.len();
+            let end_pos = line.len() - MERMAID_SOURCE_COMMENT_SUFFIX.len();
+            let source_file = &line[start_pos..end_pos];
+
+            debug!("Loading source from: {}", source_file);
+
+            // Read the source file
+            if let Ok(source_url) = Url::parse(uri) {
+                if let Ok(doc_path) = source_url.to_file_path() {
+                    if let Some(parent) = doc_path.parent() {
+                        let source_path = parent.join(source_file);
+                        if let Ok(source_code) = std::fs::read_to_string(&source_path) {
+                            // Create the block
+                            let block = RenderedMermaidBlock {
+                                code: source_code,
+                                start: Position {
+                                    line: i as u32,
+                                    character: 0,
+                                },
+                                end: Position {
+                                    line: end as u32,
+                                    character: 0,
+                                },
+                                kind: DocumentKind::Markdown,
+                            };
+
+                            match create_source_edits(uri, &block) {
+                                Ok(mut edits) => {
+                                    if let Some((url, mut text_edits)) = edits.drain().next() {
+                                        if let Some(existing_edits) = all_edits.get_mut(&url) {
+                                            existing_edits.append(&mut text_edits);
+                                        } else {
+                                            all_edits.insert(url, text_edits);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to create source edits for line {}: {}", i + 1, e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+
+    debug!("Found {} sets of edits across all rendered blocks", all_edits.len());
+    Ok(all_edits)
 }
 
 fn render_all_diagrams_content(
