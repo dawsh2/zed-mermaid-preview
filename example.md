@@ -6,24 +6,35 @@ This file demonstrates various Mermaid diagram types that you can render with th
 
 ```mermaid
 flowchart LR
-    A[Start] --> B[Process]
-    B --> C[End]
+    A[Start]:::green --> B[Process]:::blue
+    B --> C[End]:::green
+
+    classDef green fill:#9f6,stroke:#333,stroke-width:2px
+    classDef blue fill:#69f,stroke:#333,stroke-width:2px
 ```
 
 ## Complex Flowchart with Decision Points
 
 ```mermaid
 flowchart TD
-    A[Start Process] --> B{Is data valid?}
-    B -->|Yes| C[Process Data]
-    B -->|No| D[Log Error]
-    C --> E{Success?}
-    E -->|Yes| F[Save Results]
-    E -->|No| G[Retry]
-    D --> H[Notify User]
-    F --> I[End]
+    A[Start Process]:::start --> B{Is data valid?}:::decision
+    B -->|Yes| C[Process Data]:::process
+    B -->|No| D[Log Error]:::error
+    C --> E{Success?}:::decision
+    E -->|Yes| F[Save Results]:::success
+    E -->|No| G[Retry]:::warning
+    D --> H[Notify User]:::warning
+    F --> I[End]:::end
     G --> C
     H --> I
+
+    classDef start fill:#90EE90,stroke:#333,stroke-width:3px
+    classDef decision fill:#FFD700,stroke:#333,stroke-width:2px
+    classDef process fill:#87CEEB,stroke:#333,stroke-width:2px
+    classDef success fill:#98FB98,stroke:#333,stroke-width:2px
+    classDef error fill:#FF6B6B,stroke:#333,stroke-width:2px
+    classDef warning fill:#FFA500,stroke:#333,stroke-width:2px
+    classDef end fill:#DDA0DD,stroke:#333,stroke-width:3px
 ```
 
 ## Sequence Diagram
@@ -67,6 +78,11 @@ classDiagram
     Animal <|-- Dog
     Animal <|-- Cat
     Dog --> "1..*" Toy : has
+
+    style Animal fill:#f9f,stroke:#333,stroke-width:2px
+    style Dog fill:#bbf,stroke:#333,stroke-width:2px
+    style Cat fill:#fbb,stroke:#333,stroke-width:2px
+    style Toy fill:#ff9,stroke:#333,stroke-width:2px
 ```
 
 ## State Diagram
