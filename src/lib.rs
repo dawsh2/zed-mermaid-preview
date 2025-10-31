@@ -63,33 +63,33 @@ impl MermaidPreviewExtension {
             }
         }
 
-        // Always prioritize latest GitHub release over stale cache
-        // This ensures users automatically get the latest fixes
+        // During development, prioritize local binaries over GitHub releases
+        // This ensures we use our fixed binary with wrapper stripping
         let lsp_binary_name = Self::lsp_binary_name();
         let extension_dir = env::current_dir()
             .map_err(|error| format!("unable to determine extension directory: {error}"))?;
 
-        // First try to download the latest release from GitHub
+        // For development, check local binaries first
+        if let Some(path) = Self::candidate_paths(&extension_dir, lsp_binary_name)
+            .into_iter()
+            .find(|candidate| candidate.is_file())
+        {
+            eprintln!("Using local development binary: {}", path.display());
+            return Self::finalize_path(language_server_id, path, &mut self.lsp_path);
+        }
+
+        // If no local binary found, try to download from GitHub
         match self.download_lsp(language_server_id, &extension_dir, lsp_binary_name) {
             Ok(downloaded) if downloaded.is_file() => {
                 return Self::finalize_path(language_server_id, downloaded, &mut self.lsp_path);
             }
             Err(e) => {
-                eprintln!("Failed to download latest LSP: {}", e);
-                // Fall through to local binary checks
+                eprintln!("Failed to download LSP: {}", e);
             }
             _ => {}
         }
 
-        // Only check local binaries as fallback
-        if let Some(path) = Self::candidate_paths(&extension_dir, lsp_binary_name)
-            .into_iter()
-            .find(|candidate| candidate.is_file())
-        {
-            eprintln!("Using local LSP binary as fallback: {}", path.display());
-            return Self::finalize_path(language_server_id, path, &mut self.lsp_path);
-        }
-
+  
         let search_locations = Self::candidate_paths(&extension_dir, lsp_binary_name)
             .into_iter()
             .map(|candidate| candidate.display().to_string())

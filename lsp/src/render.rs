@@ -71,9 +71,6 @@ fn sanitize_svg(svg: &str) -> Result<String> {
 
     let mut sanitized = svg.to_string();
 
-    // Convert foreignObject elements to text elements for Zed compatibility
-    sanitized = convert_foreign_objects_to_text(&sanitized);
-
     sanitized = EVENT_HANDLER_ATTR.replace_all(&sanitized, "").into_owned();
     sanitized = JAVASCRIPT_HREF_ATTR
         .replace_all(&sanitized, "")
@@ -82,59 +79,6 @@ fn sanitize_svg(svg: &str) -> Result<String> {
     Ok(sanitized)
 }
 
-/// Convert foreignObject elements to SVG text elements for better compatibility
-/// with markdown viewers that don't support foreignObject (like Zed)
-fn convert_foreign_objects_to_text(svg: &str) -> String {
-    let mut result = svg.to_string();
-
-    // Process each foreignObject element
-    while let Some(caps) = FOREIGNOBJECT_POSITION_REGEX.captures(&result) {
-        if let (Some(x), Some(y), Some(width), Some(height)) = (
-            caps.get(1).map(|m| m.as_str()),
-            caps.get(2).map(|m| m.as_str()),
-            caps.get(3).map(|m| m.as_str()),
-            caps.get(4).map(|m| m.as_str()),
-        ) {
-            // Extract the full foreignObject element
-            if let Some(fo_match) = FOREIGNOBJECT_REGEX.find(&result) {
-                let fo_element = fo_match.as_str();
-
-                // Extract text content from the div
-                if let Some(text_caps) = DIV_TEXT_REGEX.captures(fo_element) {
-                    if let Some(text_match) = text_caps.get(1) {
-                        let mut text_content = text_match.as_str().trim().to_string();
-
-                        // Remove any remaining HTML tags from the text
-                        let html_tag_re = Regex::new(r#"<[^>]*>"#).unwrap();
-                        text_content = html_tag_re.replace_all(&text_content, "").to_string();
-
-                        // Calculate text positioning (center of the foreignObject)
-                        let x_num: f32 = x.parse().unwrap_or(0.0);
-                        let y_num: f32 = y.parse().unwrap_or(0.0);
-                        let width_num: f32 = width.parse().unwrap_or(0.0);
-                        let height_num: f32 = height.parse().unwrap_or(0.0);
-
-                        let text_x = x_num + width_num / 2.0;
-                        let text_y = y_num + height_num / 2.0 + 5.0; // +5 for better vertical alignment
-
-                        // Create SVG text element
-                        let svg_text = format!(
-                            "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"'trebuchet ms',verdana,arial,sans-serif\" font-size=\"16px\" fill=\"#333\">{}</text>",
-                            text_x, text_y, html_escape::encode_text(&text_content)
-                        );
-
-                        // Replace the foreignObject with the text element
-                        result = result.replace(fo_element, &svg_text);
-                    }
-                }
-            }
-        } else {
-            break; // If we can't parse the position, break out to avoid infinite loop
-        }
-    }
-
-    result
-}
 
 fn run_mermaid_cli(
     cli_path: &Path,
@@ -188,20 +132,6 @@ static JAVASCRIPT_HREF_ATTR: Lazy<Regex> = Lazy::new(|| {
         .expect("valid regex for javascript href attributes")
 });
 
-static FOREIGNOBJECT_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"<foreignObject[^>]*>(?s).*?</foreignObject>"#)
-        .expect("valid regex for foreignObject elements")
-});
-
-static DIV_TEXT_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"<foreignObject[^>]*>.*?<div[^>]*>(?s)(.*?)</div>.*?</foreignObject>"#)
-        .expect("valid regex for extracting text from foreignObject divs")
-});
-
-static FOREIGNOBJECT_POSITION_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"<foreignObject[^>]*\bx="([^"]*)"[^>]*\by="([^"]*)"[^>]*\bwidth="([^"]*)"[^>]*\bheight="([^"]*)"[^>]*>"#)
-        .expect("valid regex for extracting foreignObject position and dimensions")
-});
 
 #[cfg(test)]
 mod tests {
@@ -270,15 +200,6 @@ mod tests {
     }
 
     #[test]
-    fn keeps_foreign_object_but_sanitizes() {
-        let svg = "<svg><foreignObject><div onclick=\"alert()\">Label</div></foreignObject></svg>";
-        let sanitized = sanitize_svg(svg).unwrap();
-        assert!(sanitized.contains("foreignObject"));
-        assert!(sanitized.contains("Label"));
-        assert!(!sanitized.contains("onclick"));
-    }
-
-    #[test]
     fn regression_broken_sanitize_doesnt_leave_malformed_markup() {
         let svg = "<svg><rect onclick=\"alert('xss')\" width=\"10\" /></svg>";
         let sanitized = sanitize_svg(svg).unwrap();
@@ -290,26 +211,5 @@ mod tests {
         assert!(sanitized.contains("<rect"));
         assert!(sanitized.contains("width=\"10\""));
         assert!(sanitized.ends_with("</svg>"));
-    }
-
-    #[test]
-    fn converts_foreign_objects_to_text() {
-        let svg = r#"<svg width="100" height="50"><foreignObject x="10" y="10" width="80" height="30"><div style="text-align: center;">Start Here</div></foreignObject></svg>"#;
-        let sanitized = sanitize_svg(svg).unwrap();
-        // Should convert foreignObject to text element
-        assert!(!sanitized.contains("foreignObject"));
-        assert!(sanitized.contains("<text"));
-        assert!(sanitized.contains("Start Here"));
-        assert!(sanitized.contains("text-anchor=\"middle\""));
-    }
-
-    #[test]
-    fn removes_html_tags_from_foreign_object_text() {
-        let svg = r#"<svg width="100" height="50"><foreignObject x="10" y="10" width="80" height="30"><div><p>Label</p></div></foreignObject></svg>"#;
-        let sanitized = sanitize_svg(svg).unwrap();
-        // Should remove HTML tags but keep the text
-        assert!(sanitized.contains("Label"));
-        assert!(!sanitized.contains("<p>"));
-        assert!(!sanitized.contains("</p>"));
     }
 }
