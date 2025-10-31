@@ -8,6 +8,7 @@ Render Mermaid diagrams as SVG images directly in your Markdown files.
 - 🎨 **Clean preview** - Shows only rendered diagrams, no source code in preview
 - 📝 **Editable source** - Source saved to separate `.mmd` files for easy editing
 - 🔒 **Secure** - SVG output sanitized, files written only to project directory
+- 🎯 **Perfectly centered labels** - Native SVG text rendering with proper label positioning
 - 🚀 **Fast** - Works with any Mermaid diagram type
 
 ## Requirements
@@ -17,10 +18,18 @@ Render Mermaid diagrams as SVG images directly in your Markdown files.
 
 ## Installation
 
+### Option 1: Install from Zed Extensions
+1. Open Zed
+2. Press `Cmd+Shift+P` (or `Ctrl+Shift+P`)
+3. Type "Extensions: Install Development Extension"
+4. Navigate to the cloned repository directory
+5. Select it
+
+### Option 2: Manual Installation
 ```bash
 git clone https://github.com/dawsh2/zed-mermaid-preview.git
-cd mermaid-preview
-./build.sh && ./install.sh
+cd zed-mermaid-preview
+./scripts/build.sh && ./scripts/install.sh
 ```
 
 Restart Zed to load the extension.
@@ -64,10 +73,10 @@ See [`example.md`](example.md) for various diagram types and complexity levels.
 
 ```bash
 # Build
-./build.sh
+./scripts/build.sh
 
 # Test
-cargo test
+cd lsp && cargo test
 
 # Package for release
 ./scripts/package-mermaid-lsp.sh <target>

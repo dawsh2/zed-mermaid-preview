@@ -29,8 +29,7 @@ test_*.png
 test_*.svg
 test_*.mmd
 
-# Generated Mermaid files (except in .mermaid directory)
+# Generated Mermaid files (cached diagrams)
+.mermaid/
 *.mmd
 *.svg
-!/.mermaid/*.mmd
-!/.mermaid/*.svg
