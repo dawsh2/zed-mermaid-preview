@@ -24,7 +24,7 @@ flowchart TD
     E -->|Yes| F[Save Results]:::success
     E -->|No| G[Retry]:::warning
     D --> H[Notify User]:::warning
-    F --> I[End]:::end
+    F --> I[End]:::finish
     G --> C
     H --> I
 
@@ -34,7 +34,7 @@ flowchart TD
     classDef success fill:#98FB98,stroke:#333,stroke-width:2px
     classDef error fill:#FF6B6B,stroke:#333,stroke-width:2px
     classDef warning fill:#FFA500,stroke:#333,stroke-width:2px
-    classDef end fill:#DDA0DD,stroke:#333,stroke-width:3px
+    classDef finish fill:#DDA0DD,stroke:#333,stroke-width:3px
 ```
 
 ## Sequence Diagram
