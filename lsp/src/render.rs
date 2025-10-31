@@ -86,14 +86,31 @@ fn convert_foreign_objects_to_text(svg: &str) -> Result<String> {
         // Extract text from HTML content
         let text = extract_text_from_html(content);
 
-        // Get positioning attributes from foreignObject tag
+        // Extract positioning and sizing attributes from foreignObject tag
         let x = extract_attr(full_match, "x").unwrap_or("0".to_string());
         let y = extract_attr(full_match, "y").unwrap_or("0".to_string());
+        let width = extract_attr(full_match, "width").unwrap_or("0".to_string());
+        let height = extract_attr(full_match, "height").unwrap_or("0".to_string());
 
-        // Create a text element to replace foreignObject
+        // Calculate center point of the foreignObject
+        let x_val = x.parse::<f64>().unwrap_or(0.0);
+        let y_val = y.parse::<f64>().unwrap_or(0.0);
+        let width_val = width.parse::<f64>().unwrap_or(0.0);
+        let height_val = height.parse::<f64>().unwrap_or(0.0);
+
+        let center_x = x_val + width_val / 2.0;
+        let center_y = y_val + height_val / 2.0;
+
+        // Skip empty or zero-size foreignObjects (these are often edge labels without content)
+        if width_val <= 0.0 || height_val <= 0.0 || text.trim().is_empty() {
+            result = result.replace(full_match, "");
+            continue;
+        }
+
+        // Create a text element to replace foreignObject with proper centering
         let text_element = format!(
-            "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"Arial, sans-serif\" font-size=\"14\" fill=\"#333\">{}</text>",
-            x, y, text
+            "<text x=\"{:.2}\" y=\"{:.2}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"Arial, sans-serif\" font-size=\"14\" fill=\"#333\">{}</text>",
+            center_x, center_y, text
         );
 
         result = result.replace(full_match, &text_element);
@@ -226,6 +243,28 @@ mod tests {
         assert!(sanitized.contains("<text"));
         assert!(sanitized.contains("Start Here"));
         assert!(sanitized.contains("text-anchor=\"middle\""));
+        // Should be positioned at center (10 + 80/2 = 50, 10 + 30/2 = 25)
+        assert!(sanitized.contains("x=\"50.00\""));
+        assert!(sanitized.contains("y=\"25.00\""));
+    }
+
+    #[test]
+    fn centers_text_correctly_in_foreignObject() {
+        let svg = r#"<svg width="200" height="100"><foreignObject x="20" y="30" width="160" height="40"><div><p>Test Label</p></div></foreignObject></svg>"#;
+        let sanitized = sanitize_svg(svg).unwrap();
+        // Should be positioned at center (20 + 160/2 = 100, 30 + 40/2 = 50)
+        assert!(sanitized.contains("x=\"100.00\""));
+        assert!(sanitized.contains("y=\"50.00\""));
+        assert!(sanitized.contains("Test Label"));
+    }
+
+    #[test]
+    fn skips_empty_foreignObjects() {
+        let svg = r#"<svg width="100" height="50"><foreignObject x="0" y="0" width="0" height="0"><div></div></foreignObject></svg>"#;
+        let sanitized = sanitize_svg(svg).unwrap();
+        // Should remove empty foreignObject entirely
+        assert!(!sanitized.contains("foreignObject"));
+        assert!(!sanitized.contains("<text"));
     }
 
     #[test]

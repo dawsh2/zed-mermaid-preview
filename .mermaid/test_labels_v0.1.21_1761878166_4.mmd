@@ -1,0 +1,21 @@
+graph LR
+    subgraph Input Phase
+        A1[User Input] --> A2[Validate Data]
+        A2 --> A3[Parse Request]
+    end
+
+    subgraph Processing
+        B1[Core Logic] --> B2[Transform]
+        B2 --> B3[Calculate Result]
+    end
+
+    subgraph Output
+        C1[Format Output] --> C2[Send Response]
+    end
+
+    A3 --> B1
+    B3 --> C1
+
+    style A1 fill:#e1f5fe
+    style B1 fill:#f3e5f5
+    style C1 fill:#e8f5e9
