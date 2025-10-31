@@ -11,10 +11,14 @@ use html_escape;
 
 // Precompiled regex patterns to avoid DoS and improve performance
 static FOREIGN_OBJECT_REGEX: Lazy<Regex> = Lazy::new(|| {
-    // More efficient pattern that prevents catastrophic backtracking:
-    // - Use [^<]+ instead of .*? to match content (stops at first <)
-    // - Atomic grouping behavior by being more specific
-    Regex::new(r#"<foreignObject\s+[^>]+>([^<]+(?:<(?!/foreignObject>)[^<]*)*)</foreignObject>"#)
+    // Safe pattern using negated character classes to prevent catastrophic backtracking:
+    // - [^>]* matches attributes (stops at >, no backtracking)
+    // - (.*?) matches content non-greedily
+    // - While this has .*?, the overall pattern is bounded and safe because:
+    //   1. It's non-greedy (.*? not .*)
+    //   2. Bounded by specific end tag </foreignObject>
+    //   3. No nested quantifiers like (.*?)*
+    Regex::new(r#"<foreignObject[^>]*>(.*?)</foreignObject>"#)
         .expect("Foreign object regex should compile")
 });
 
