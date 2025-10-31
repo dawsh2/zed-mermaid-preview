@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use log::{debug, error, info};
 use lsp_server::{Connection, Message, Request, Response, ResponseError};
 use lsp_types::*;
 use serde_json::json;
@@ -28,21 +29,6 @@ const MERMAID_FENCE_END: &str = "```";
 
 static SVG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-// Helper function to check if debug logging is enabled
-fn is_debug_enabled() -> bool {
-    std::env::var("MERMAID_LSP_DEBUG")
-        .unwrap_or_else(|_| "false".to_string())
-        .parse::<bool>()
-        .unwrap_or(false)
-}
-
-// Helper function for conditional debug logging
-fn debug_print(msg: &str) {
-    if is_debug_enabled() {
-        eprintln!("{}", msg);
-    }
-}
-
 /// Send an error notification to the LSP client
 fn send_error_notification(connection: &Connection, message: &str) {
     let notification = lsp_server::Notification {
@@ -54,11 +40,12 @@ fn send_error_notification(connection: &Connection, message: &str) {
     };
 
     if let Err(e) = connection.sender.send(Message::Notification(notification)) {
-        eprintln!("Failed to send error notification: {}", e);
+        error!("Failed to send error notification: {}", e);
     }
 }
 
 /// Send a warning notification to the LSP client
+#[allow(dead_code)]
 fn send_warning_notification(connection: &Connection, message: &str) {
     let notification = lsp_server::Notification {
         method: "window/showMessage".to_string(),
@@ -69,7 +56,7 @@ fn send_warning_notification(connection: &Connection, message: &str) {
     };
 
     if let Err(e) = connection.sender.send(Message::Notification(notification)) {
-        eprintln!("Failed to send warning notification: {}", e);
+        error!("Failed to send warning notification: {}", e);
     }
 }
 
@@ -94,7 +81,7 @@ fn strip_mermaid_wrapper(code: &str) -> String {
 
 // Find the most recent matching source file when the referenced file doesn't exist
 fn find_most_recent_source_file(missing_path: &Path, _uri: &str) -> Option<String> {
-    debug_print("Searching for recent source file matching pattern");
+    debug!("Searching for recent source file matching pattern");
 
     // Extract the base filename pattern from the missing path
     if let Some(file_name) = missing_path.file_name().and_then(|n| n.to_str()) {
@@ -111,9 +98,7 @@ fn find_most_recent_source_file(missing_path: &Path, _uri: &str) -> Option<Strin
             // Get the directory to search in
             let search_dir = missing_path.parent().unwrap_or_else(|| Path::new(MERMAID_MEDIA_DIR));
 
-            if is_debug_enabled() {
-                eprintln!("Searching in {:?} for pattern {}", search_dir, pattern);
-            }
+            debug!("Searching in {:?} for pattern {}", search_dir, pattern);
 
             // Find all matching files and get the most recent one
             if let Ok(entries) = std::fs::read_dir(search_dir) {
@@ -143,15 +128,11 @@ fn find_most_recent_source_file(missing_path: &Path, _uri: &str) -> Option<Strin
 
                 if let Some((best_entry, _)) = best_match {
                     let best_path = best_entry.path();
-                    if is_debug_enabled() {
-                        eprintln!("Found most recent match: {:?}", best_path);
-                    }
+                    debug!("Found most recent match: {:?}", best_path);
 
                     // Try to read it
                     if let Ok(content) = std::fs::read_to_string(&best_path) {
-                        if is_debug_enabled() {
-                            eprintln!("Successfully read recent file ({} bytes)", content.len());
-                        }
+                        debug!("Successfully read recent file ({} bytes)", content.len());
                         return Some(content);
                     }
                 }
@@ -159,25 +140,24 @@ fn find_most_recent_source_file(missing_path: &Path, _uri: &str) -> Option<Strin
         }
     }
 
-    if is_debug_enabled() {
-        eprintln!("No recent source file found");
-    }
+    debug!("No recent source file found");
     None
 }
 
 fn main() -> Result<()> {
-    if is_debug_enabled() {
-        eprintln!("Mermaid LSP starting...");
-        // Log current working directory
-        if let Ok(cwd) = std::env::current_dir() {
-            eprintln!("LSP working directory: {:?}", cwd);
-        }
+    // Initialize logging
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).format_timestamp_millis().init();
+
+    info!("Mermaid LSP starting...");
+    // Log current working directory
+    if let Ok(cwd) = std::env::current_dir() {
+        info!("LSP working directory: {:?}", cwd);
     }
 
     // Create JSON-RPC connection
     let (connection, io_threads) = Connection::stdio();
 
-    eprintln!("Connection established, waiting for initialization...");
+    info!("Connection established, waiting for initialization...");
 
     // Initialize LSP
     let server_capabilities = ServerCapabilities {
@@ -197,7 +177,7 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    eprintln!("Sending server capabilities...");
+    info!("Sending server capabilities...");
     let initialize_params = connection.initialize(serde_json::to_value(server_capabilities)?)?;
 
     // Log initialization
@@ -205,7 +185,7 @@ fn main() -> Result<()> {
         .get("rootUri")
         .and_then(|v| v.as_str())
         .unwrap_or("<none>");
-    eprintln!("Mermaid LSP initialized for workspace: {}", root_uri);
+    info!("Mermaid LSP initialized for workspace: {}", root_uri);
 
     // Store document content
     let mut documents: HashMap<String, String> = HashMap::new();
@@ -216,14 +196,14 @@ fn main() -> Result<()> {
             Ok(msg) => {
                 match msg {
                     Message::Request(req) => {
-                        eprintln!("Received request: {}", req.method);
+                        debug!("Received request: {}", req.method);
                         let req_id = req.id.clone();
                         match handle_request(&connection, req, &mut documents) {
                             Ok(()) => {
-                                eprintln!("Request handled successfully");
+                                debug!("Request handled successfully");
                             }
                             Err(e) => {
-                                eprintln!("Error handling request: {}", e);
+                                error!("Error handling request: {}", e);
                                 // Send error response
                                 let error_response = Response {
                                     id: req_id,
@@ -242,21 +222,21 @@ fn main() -> Result<()> {
                         // Handle responses if needed
                     }
                     Message::Notification(notif) => {
-                        eprintln!("Received notification: {}", notif.method);
+                        debug!("Received notification: {}", notif.method);
                         if let Err(e) = handle_notification(notif, &connection, &mut documents) {
-                            eprintln!("Error handling notification: {}", e);
+                            error!("Error handling notification: {}", e);
                         }
                     }
                 }
             }
             Err(err) => {
-                eprintln!("LSP connection error: {}", err);
+                error!("LSP connection error: {}", err);
                 break;
             }
         }
     }
 
-    eprintln!("LSP shutting down...");
+    info!("LSP shutting down...");
     io_threads.join()?;
     Ok(())
 }
@@ -266,10 +246,10 @@ fn handle_request(
     req: Request,
     documents: &mut HashMap<String, String>,
 ) -> Result<()> {
-    eprintln!("Received request: {}", req.method);
+    debug!("Received request: {}", req.method);
     match req.method.as_str() {
         "textDocument/codeAction" => {
-            eprintln!("Processing code action request...");
+            debug!("Processing code action request...");
             let params: CodeActionParams = serde_json::from_value(req.params)
                 .map_err(|e| anyhow::anyhow!("Invalid codeAction params: {}", e))?;
 
@@ -284,7 +264,7 @@ fn handle_request(
             connection.sender.send(Message::Response(response))?;
         }
         "workspace/executeCommand" => {
-            eprintln!("Processing execute command request...");
+            debug!("Processing execute command request...");
             let params: ExecuteCommandParams = serde_json::from_value(req.params)
                 .map_err(|e| anyhow::anyhow!("Invalid executeCommand params: {}", e))?;
 
@@ -299,7 +279,7 @@ fn handle_request(
             connection.sender.send(Message::Response(response))?;
         }
         "shutdown" => {
-            eprintln!("LSP received shutdown request");
+            info!("LSP received shutdown request");
             let response = Response {
                 id: req.id,
                 result: Some(json!(null)),
@@ -330,7 +310,7 @@ fn handle_notification(
     _connection: &Connection,
     documents: &mut HashMap<String, String>,
 ) -> Result<()> {
-    eprintln!("Received notification: {}", notif.method);
+    debug!("Received notification: {}", notif.method);
     // Handle notifications directly
     match notif.method.as_str() {
         "textDocument/didOpen" => {
@@ -384,9 +364,7 @@ fn get_code_actions(
     let uri = params.text_document.uri.to_string();
     let cursor = params.range.start;
 
-    if is_debug_enabled() {
-        eprintln!("get_code_actions called for URI: {}, cursor line: {}", uri, cursor.line);
-    }
+    debug!("get_code_actions called for URI: {}, cursor line: {}", uri, cursor.line);
 
     let content = documents
         .get(&uri)
@@ -396,16 +374,12 @@ fn get_code_actions(
 
     // Count total mermaid blocks in the document - O(1) operation
     let total_blocks = count_mermaid_blocks(content);
-    if is_debug_enabled() {
-        eprintln!("Found {} mermaid blocks, cursor at line {}", total_blocks, cursor.line);
-    }
+    debug!("Found {} mermaid blocks, cursor at line {}", total_blocks, cursor.line);
 
     // For "Render All", we need to pre-compute due to LSP limitations
     // But we can optimize with caching and better user feedback
     if total_blocks > 1 {
-        if is_debug_enabled() {
-            eprintln!("Pre-rendering all {} diagrams (LSP limitation)", total_blocks);
-        }
+        debug!("Pre-rendering all {} diagrams (LSP limitation)", total_blocks);
 
         let edit = WorkspaceEdit {
             changes: Some(render_all_diagrams_content(&uri, content, Some(connection))?),
@@ -424,16 +398,12 @@ fn get_code_actions(
             data: None,
         });
     } else {
-        if is_debug_enabled() {
-            eprintln!("Not adding Render All (only {} blocks)", total_blocks);
-        }
+        debug!("Not adding Render All (only {} blocks)", total_blocks);
     }
 
     // For single diagrams, we can be more responsive
     if let Some(block) = locate_mermaid_source_block(content, &uri, &cursor) {
-        if is_debug_enabled() {
-            eprintln!("PRE-RENDERING single diagram (LSP limitation)");
-        }
+        debug!("PRE-RENDERING single diagram (LSP limitation)");
 
         let edit = WorkspaceEdit {
             changes: Some(create_render_edits(&uri, &block)?),
@@ -455,9 +425,7 @@ fn get_code_actions(
 
     // Edit Mermaid action - only show when cursor is ON the HTML comment line
     // This prevents confusion when cursor is on the image line
-    if is_debug_enabled() {
-        eprintln!("Checking if cursor is on a mermaid comment line...");
-    }
+    debug!("Checking if cursor is on a mermaid comment line...");
 
     let lines: Vec<&str> = content.lines().collect();
     let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
@@ -466,16 +434,12 @@ fn get_code_actions(
         let line = lines[cursor_line].trim();
         let is_on_comment = line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) && line.ends_with(MERMAID_SOURCE_COMMENT_SUFFIX);
 
-        if is_debug_enabled() {
-            eprintln!("Line {}: '{}' - is_comment: {}", cursor_line, line, is_on_comment);
-        }
+        debug!("Line {}: '{}' - is_comment: {}", cursor_line, line, is_on_comment);
 
         if is_on_comment {
             // Now find the rendered block for this comment
             if let Some(block) = locate_rendered_mermaid_block(content, &uri, &cursor) {
-                if is_debug_enabled() {
-                    eprintln!("Found rendered mermaid block, adding Edit action!");
-                }
+                debug!("Found rendered mermaid block, adding Edit action!");
                 let edit = WorkspaceEdit {
                     changes: Some(create_source_edits(&uri, &block)?),
                     document_changes: None,
@@ -497,9 +461,7 @@ fn get_code_actions(
                 );
             }
         } else {
-            if is_debug_enabled() {
-                eprintln!("Cursor not on mermaid comment line, skipping Edit action");
-            }
+            debug!("Cursor not on mermaid comment line, skipping Edit action");
         }
     }
 
@@ -607,38 +569,26 @@ fn locate_rendered_mermaid_block(
     uri: &str,
     cursor: &Position,
 ) -> Option<RenderedMermaidBlock> {
-    if is_debug_enabled() {
-        eprintln!("locate_rendered_mermaid_block ENTRY - content length: {}", content.len());
-    }
+    debug!("locate_rendered_mermaid_block ENTRY - content length: {}", content.len());
 
     let lines: Vec<&str> = content.lines().collect();
-    if is_debug_enabled() {
-        eprintln!("locate_rendered_mermaid_block - parsed {} lines", lines.len());
-    }
+    debug!("locate_rendered_mermaid_block - parsed {} lines", lines.len());
 
     if lines.is_empty() {
-        if is_debug_enabled() {
-            eprintln!("locate_rendered_mermaid_block - EARLY RETURN: lines.is_empty()");
-        }
+        debug!("locate_rendered_mermaid_block - EARLY RETURN: lines.is_empty()");
         return None;
     }
 
     let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
-    if is_debug_enabled() {
-        eprintln!("locate_rendered_mermaid_block - cursor at line {}, total lines: {}", cursor_line, lines.len());
-    }
+    debug!("locate_rendered_mermaid_block - cursor at line {}, total lines: {}", cursor_line, lines.len());
 
-    if is_debug_enabled() {
-        eprintln!("=== locate_rendered_mermaid_block called ===");
-        eprintln!("Cursor line: {}, total lines: {}", cursor_line, lines.len());
-    }
+    debug!("=== locate_rendered_mermaid_block called ===");
+    debug!("Cursor line: {}, total lines: {}", cursor_line, lines.len());
 
     // Find comment with mermaid source file reference
     // Search BACKWARDS from cursor first (most common: cursor on image line after comment)
     // Then search forward if not found
-    if is_debug_enabled() {
-        eprintln!("Searching for mermaid comment near cursor line {}", cursor_line);
-    }
+    debug!("Searching for mermaid comment near cursor line {}", cursor_line);
 
     let source_line = {
         // First, search backwards from cursor (up to 10 lines)
@@ -646,8 +596,8 @@ fn locate_rendered_mermaid_block(
         let backward_result = (search_start..=cursor_line).rev().find(|&i| {
             let line = lines[i].trim();
             let is_comment = line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) && line.ends_with(MERMAID_SOURCE_COMMENT_SUFFIX);
-            if is_comment && is_debug_enabled() {
-                eprintln!("Found mermaid comment (backward) at line {}: {}", i, line);
+            if is_comment {
+                debug!("Found mermaid comment (backward) at line {}: {}", i, line);
             }
             is_comment
         });
@@ -660,8 +610,8 @@ fn locate_rendered_mermaid_block(
             let forward_result = (cursor_line..=search_end).find(|&i| {
                 let line = lines[i].trim();
                 let is_comment = line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) && line.ends_with(MERMAID_SOURCE_COMMENT_SUFFIX);
-                if is_comment && is_debug_enabled() {
-                    eprintln!("Found mermaid comment (forward) at line {}: {}", i, line);
+                if is_comment {
+                    debug!("Found mermaid comment (forward) at line {}: {}", i, line);
                 }
                 is_comment
             });
@@ -682,62 +632,44 @@ fn locate_rendered_mermaid_block(
             // source_file_path is relative to the document's parent
             if let Some(parent) = path.parent() {
                 let full_path = parent.join(source_file_path);
-                if is_debug_enabled() {
-                    eprintln!("Document path: {:?}", path);
-                    eprintln!("Document parent: {:?}", parent);
-                    eprintln!("Relative source file: {}", source_file_path);
-                    eprintln!("Resolved full path: {:?}", full_path);
-                }
+                debug!("Document path: {:?}", path);
+                debug!("Document parent: {:?}", parent);
+                debug!("Relative source file: {}", source_file_path);
+                debug!("Resolved full path: {:?}", full_path);
 
                 full_path
             } else {
-                if is_debug_enabled() {
-                    eprintln!("No parent directory for document, using relative path");
-                }
+                debug!("No parent directory for document, using relative path");
                 Path::new(source_file_path).to_path_buf()
             }
         } else {
-            if is_debug_enabled() {
-                eprintln!("Could not parse URI to file path: {}", uri);
-            }
+            debug!("Could not parse URI to file path: {}", uri);
             Path::new(source_file_path).to_path_buf()
         }
     } else {
-        if is_debug_enabled() {
-            eprintln!("Could not parse URI: {}", uri);
-        }
+        debug!("Could not parse URI: {}", uri);
         Path::new(source_file_path).to_path_buf()
     };
 
-    if is_debug_enabled() {
-        eprintln!("Looking for source file at: {:?}", source_full_path);
-        eprintln!("File exists: {}", source_full_path.exists());
-    }
+    debug!("Looking for source file at: {:?}", source_full_path);
+    debug!("File exists: {}", source_full_path.exists());
 
     // Read the source from the file
     let code = match fs::read_to_string(&source_full_path) {
         Ok(content) => {
-            if is_debug_enabled() {
-                eprintln!("Successfully read source file ({} bytes)", content.len());
-            }
+            debug!("Successfully read source file ({} bytes)", content.len());
             content
         }
         Err(e) => {
-            if is_debug_enabled() {
-                eprintln!("Failed to read source file: {}, attempting to find recent file...", e);
-                eprintln!("Error details: {:?}", e.kind());
-            }
+            debug!("Failed to read source file: {}, attempting to find recent file...", e);
+            debug!("Error details: {:?}", e.kind());
 
             // Try to find the most recent matching file
             if let Some(recent_code) = find_most_recent_source_file(&source_full_path, &uri) {
-                if is_debug_enabled() {
-                    eprintln!("Found recent source file, using that instead");
-                }
+                debug!("Found recent source file, using that instead");
                 recent_code
             } else {
-                if is_debug_enabled() {
-                    eprintln!("Could not find any recent source file");
-                }
+                debug!("Could not find any recent source file");
                 return None;
             }
         }
@@ -766,11 +698,9 @@ fn locate_rendered_mermaid_block(
         source_line + 2
     };
 
-    if is_debug_enabled() {
-        eprintln!("Found rendered block - comment line {}, img line {}, end line {}", source_line, img_line, end_line);
-    }
+    debug!("Found rendered block - comment line {}, img line {}, end line {}", source_line, img_line, end_line);
 
-    
+
     Some(RenderedMermaidBlock {
         code,
         start: Position {
@@ -874,15 +804,11 @@ fn create_render_edits(
 
     // Check if we have a cached version
     let svg_contents = if cache_path.exists() {
-        if is_debug_enabled() {
-            eprintln!("Using cached SVG for hash {:x}", code_hash);
-        }
+        debug!("Using cached SVG for hash {:x}", code_hash);
         fs::read_to_string(&cache_path)
             .map_err(|e| anyhow!("Failed to read cached SVG: {}", e))?
     } else {
-        if is_debug_enabled() {
-            eprintln!("Rendering new SVG (cache miss) for hash {:x}", code_hash);
-        }
+        debug!("Rendering new SVG (cache miss) for hash {:x}", code_hash);
         let contents = render_mermaid(&block.code)?;
 
         // Cache the result
@@ -941,9 +867,7 @@ fn create_render_edits(
         svg_relative
     );
 
-    if is_debug_enabled() {
-        eprintln!("Rendering with external source file");
-    }
+    debug!("Rendering with external source file");
 
     if !new_text.ends_with('\n') {
         new_text.push('\n');
@@ -1072,7 +996,7 @@ fn render_all_diagrams_content(
                     }
                     Err(e) => {
                         let error_msg = format!("Failed to render diagram at line {}: {}", start + 1, e);
-                        eprintln!("{}", error_msg);
+                        error!("{}", error_msg);
                         if let Some(conn) = connection {
                             send_error_notification(conn, &error_msg);
                         }
@@ -1093,9 +1017,7 @@ fn execute_command(
     documents: &HashMap<String, String>,
     connection: &Connection,
 ) -> Result<WorkspaceEdit> {
-    if is_debug_enabled() {
-        eprintln!("Executing command: {}", params.command);
-    }
+    debug!("Executing command: {}", params.command);
 
     match params.command.as_str() {
         "mermaid.renderAllLightweight" => {
@@ -1110,9 +1032,7 @@ fn execute_command(
                 .get(uri)
                 .ok_or_else(|| anyhow::anyhow!("Document not found: {}", uri))?;
 
-            if is_debug_enabled() {
-                eprintln!("Actually rendering all diagrams for {} (ON DEMAND)", uri);
-            }
+            debug!("Actually rendering all diagrams for {} (ON DEMAND)", uri);
             let changes = render_all_diagrams_content(uri, content, Some(connection))?;
 
             Ok(WorkspaceEdit {
@@ -1147,9 +1067,7 @@ fn execute_command(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing code"))?;
 
-            if is_debug_enabled() {
-                eprintln!("Rendering single diagram for {} (ON DEMAND)", uri);
-            }
+            debug!("Rendering single diagram for {} (ON DEMAND)", uri);
 
             // Create the block
             let block = MermaidSourceBlock {
