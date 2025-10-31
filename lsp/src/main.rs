@@ -43,6 +43,36 @@ fn debug_print(msg: &str) {
     }
 }
 
+/// Send an error notification to the LSP client
+fn send_error_notification(connection: &Connection, message: &str) {
+    let notification = lsp_server::Notification {
+        method: "window/showMessage".to_string(),
+        params: json!({
+            "type": MessageType::ERROR,
+            "message": format!("Mermaid: {}", message)
+        }),
+    };
+
+    if let Err(e) = connection.sender.send(Message::Notification(notification)) {
+        eprintln!("Failed to send error notification: {}", e);
+    }
+}
+
+/// Send a warning notification to the LSP client
+fn send_warning_notification(connection: &Connection, message: &str) {
+    let notification = lsp_server::Notification {
+        method: "window/showMessage".to_string(),
+        params: json!({
+            "type": MessageType::WARNING,
+            "message": format!("Mermaid: {}", message)
+        }),
+    };
+
+    if let Err(e) = connection.sender.send(Message::Notification(notification)) {
+        eprintln!("Failed to send warning notification: {}", e);
+    }
+}
+
 // Strip mermaid wrapper (```mermaid ... ```) from code if present
 fn strip_mermaid_wrapper(code: &str) -> String {
     let trimmed = code.trim();
@@ -243,7 +273,7 @@ fn handle_request(
             let params: CodeActionParams = serde_json::from_value(req.params)
                 .map_err(|e| anyhow::anyhow!("Invalid codeAction params: {}", e))?;
 
-            let actions = get_code_actions(&params, documents)?;
+            let actions = get_code_actions(&params, documents, connection)?;
 
             let response = Response {
                 id: req.id,
@@ -258,7 +288,7 @@ fn handle_request(
             let params: ExecuteCommandParams = serde_json::from_value(req.params)
                 .map_err(|e| anyhow::anyhow!("Invalid executeCommand params: {}", e))?;
 
-            let result = execute_command(&params, documents)?;
+            let result = execute_command(&params, documents, connection)?;
 
             let response = Response {
                 id: req.id,
@@ -349,6 +379,7 @@ fn handle_notification(
 fn get_code_actions(
     params: &CodeActionParams,
     documents: &HashMap<String, String>,
+    connection: &Connection,
 ) -> Result<Vec<CodeAction>> {
     let uri = params.text_document.uri.to_string();
     let cursor = params.range.start;
@@ -377,7 +408,7 @@ fn get_code_actions(
         }
 
         let edit = WorkspaceEdit {
-            changes: Some(render_all_diagrams_content(&uri, content)?),
+            changes: Some(render_all_diagrams_content(&uri, content, Some(connection))?),
             document_changes: None,
             change_annotations: None,
         };
@@ -990,7 +1021,11 @@ fn count_mermaid_blocks(content: &str) -> usize {
     count
 }
 
-fn render_all_diagrams_content(uri: &str, content: &str) -> Result<HashMap<Url, Vec<TextEdit>>> {
+fn render_all_diagrams_content(
+    uri: &str,
+    content: &str,
+    connection: Option<&Connection>,
+) -> Result<HashMap<Url, Vec<TextEdit>>> {
     let lines: Vec<&str> = content.lines().collect();
     let mut all_edits: HashMap<Url, Vec<TextEdit>> = HashMap::new();
     let mut i = 0;
@@ -1025,12 +1060,21 @@ fn render_all_diagrams_content(uri: &str, content: &str) -> Result<HashMap<Url, 
                     },
                 };
 
-                if let Ok(mut edits) = create_render_edits(uri, &block) {
-                    if let Some((url, mut text_edits)) = edits.drain().next() {
-                        if let Some(existing_edits) = all_edits.get_mut(&url) {
-                            existing_edits.append(&mut text_edits);
-                        } else {
-                            all_edits.insert(url, text_edits);
+                match create_render_edits(uri, &block) {
+                    Ok(mut edits) => {
+                        if let Some((url, mut text_edits)) = edits.drain().next() {
+                            if let Some(existing_edits) = all_edits.get_mut(&url) {
+                                existing_edits.append(&mut text_edits);
+                            } else {
+                                all_edits.insert(url, text_edits);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to render diagram at line {}: {}", start + 1, e);
+                        eprintln!("{}", error_msg);
+                        if let Some(conn) = connection {
+                            send_error_notification(conn, &error_msg);
                         }
                     }
                 }
@@ -1047,6 +1091,7 @@ fn render_all_diagrams_content(uri: &str, content: &str) -> Result<HashMap<Url, 
 fn execute_command(
     params: &ExecuteCommandParams,
     documents: &HashMap<String, String>,
+    connection: &Connection,
 ) -> Result<WorkspaceEdit> {
     if is_debug_enabled() {
         eprintln!("Executing command: {}", params.command);
@@ -1068,7 +1113,7 @@ fn execute_command(
             if is_debug_enabled() {
                 eprintln!("Actually rendering all diagrams for {} (ON DEMAND)", uri);
             }
-            let changes = render_all_diagrams_content(uri, content)?;
+            let changes = render_all_diagrams_content(uri, content, Some(connection))?;
 
             Ok(WorkspaceEdit {
                 changes: Some(changes),
