@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use lsp_server::{Connection, Message, Request, Response, ResponseError};
 use lsp_types::*;
 use serde_json::json;
@@ -742,6 +742,74 @@ fn find_mermaid_fence(lines: &[&str], cursor_line: usize) -> Option<(usize, usiz
     Some((start, end))
 }
 
+/// Clean up old diagram files that are no longer referenced in the document
+/// Keeps cache files (.cache/*.svg) but removes unreferenced output files
+fn cleanup_old_diagram_files(_uri: &str, content: &str, media_dir: &Path) -> Result<()> {
+    debug!("Cleaning up old diagram files in {:?}", media_dir);
+
+    // Find all currently referenced files in the document
+    let mut referenced_files = std::collections::HashSet::new();
+    for line in content.lines() {
+        if line.contains(MERMAID_SOURCE_COMMENT_PREFIX) {
+            // Extract the .mmd file path from comment
+            if let Some(start) = line.find(MERMAID_SOURCE_COMMENT_PREFIX) {
+                let path_start = start + MERMAID_SOURCE_COMMENT_PREFIX.len();
+                if let Some(end) = line[path_start..].find(MERMAID_SOURCE_COMMENT_SUFFIX) {
+                    let file_path = line[path_start..path_start + end].trim();
+                    referenced_files.insert(file_path.to_string());
+                }
+            }
+        }
+        // Also collect SVG references from markdown image links
+        if line.contains("![Mermaid Diagram](") {
+            if let Some(start) = line.find("](") {
+                let path_start = start + 2;
+                if let Some(end) = line[path_start..].find(')') {
+                    let file_path = line[path_start..path_start + end].trim();
+                    referenced_files.insert(file_path.to_string());
+                }
+            }
+        }
+    }
+
+    debug!("Found {} referenced files in document", referenced_files.len());
+
+    // Scan the media directory for orphaned files
+    if let Ok(entries) = std::fs::read_dir(media_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            // Skip directories (like .cache)
+            if path.is_dir() {
+                continue;
+            }
+
+            // Only clean up .mmd and .svg files
+            if let Some(ext) = path.extension() {
+                if ext != "mmd" && ext != "svg" {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+
+            // Check if this file is referenced
+            let file_name = path.file_name().unwrap().to_string_lossy();
+            let relative_path = format!("{}/{}", MERMAID_MEDIA_DIR, file_name);
+
+            if !referenced_files.contains(file_name.as_ref()) &&
+               !referenced_files.contains(&relative_path) {
+                debug!("Removing unreferenced file: {:?}", path);
+                if let Err(e) = std::fs::remove_file(&path) {
+                    warn!("Failed to remove old file {:?}: {}", path, e);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn create_render_edits(
     uri: &str,
     block: &MermaidSourceBlock,
@@ -1006,6 +1074,18 @@ fn render_all_diagrams_content(
             i = end + 1;
         } else {
             i += 1;
+        }
+    }
+
+    // Clean up old unreferenced files after rendering
+    if let Ok(url) = Url::parse(uri) {
+        if let Ok(path) = url.to_file_path() {
+            if let Some(parent) = path.parent() {
+                let media_dir = parent.join(MERMAID_MEDIA_DIR);
+                if media_dir.exists() {
+                    let _ = cleanup_old_diagram_files(uri, content, &media_dir);
+                }
+            }
         }
     }
 
