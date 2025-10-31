@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::{
     env, fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, Stdio},
 };
 use tempfile::tempdir;

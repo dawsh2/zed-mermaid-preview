@@ -17,6 +17,15 @@ mod render;
 
 use crate::render::render_mermaid;
 
+// Constants to avoid magic strings
+const MERMAID_SOURCE_COMMENT_PREFIX: &str = "<!-- mermaid-source-file:";
+const MERMAID_SOURCE_COMMENT_SUFFIX: &str = "-->";
+const MERMAID_MEDIA_DIR: &str = ".mermaid";
+const MERMAID_CACHE_DIR: &str = ".cache";
+const MERMAID_FILE_EXTENSION: &str = ".mmd";
+const MERMAID_FENCE_START: &str = "```mermaid";
+const MERMAID_FENCE_END: &str = "```";
+
 static SVG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 // Helper function to check if debug logging is enabled
@@ -37,23 +46,24 @@ fn debug_print(msg: &str) {
 // Strip mermaid wrapper (```mermaid ... ```) from code if present
 fn strip_mermaid_wrapper(code: &str) -> String {
     let trimmed = code.trim();
+    let lines: Vec<&str> = trimmed.lines().collect();
 
-    // Check if code starts with ```mermaid and ends with ```
-    if trimmed.starts_with("```mermaid") && trimmed.ends_with("```") {
-        // Split by lines and remove first and last line
-        let lines: Vec<&str> = trimmed.lines().collect();
-        if lines.len() >= 3 {
-            // Remove the first line (```mermaid) and last line (```)
-            return lines[1..lines.len()-1].join("\n");
-        }
+    if lines.is_empty() {
+        return code.to_string();
     }
 
-    // Return as-is if no wrapper found
+    let has_start = lines[0].trim().starts_with(MERMAID_FENCE_START);
+    let has_end = lines.last().map(|l| l.trim() == MERMAID_FENCE_END).unwrap_or(false);
+
+    if has_start && has_end && lines.len() >= 2 {
+        return lines[1..lines.len() - 1].join("\n");
+    }
+
     code.to_string()
 }
 
 // Find the most recent matching source file when the referenced file doesn't exist
-fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String> {
+fn find_most_recent_source_file(missing_path: &Path, _uri: &str) -> Option<String> {
     debug_print("Searching for recent source file matching pattern");
 
     // Extract the base filename pattern from the missing path
@@ -69,7 +79,7 @@ fn find_most_recent_source_file(missing_path: &Path, uri: &str) -> Option<String
             let pattern = format!("{}_{}_{}", base_name, "*", diagram_num);
 
             // Get the directory to search in
-            let search_dir = missing_path.parent().unwrap_or_else(|| Path::new(".mermaid"));
+            let search_dir = missing_path.parent().unwrap_or_else(|| Path::new(MERMAID_MEDIA_DIR));
 
             if is_debug_enabled() {
                 eprintln!("Searching in {:?} for pattern {}", search_dir, pattern);
@@ -423,7 +433,7 @@ fn get_code_actions(
 
     if cursor_line < lines.len() {
         let line = lines[cursor_line].trim();
-        let is_on_comment = line.starts_with("<!-- mermaid-source-file:") && line.ends_with("-->");
+        let is_on_comment = line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) && line.ends_with(MERMAID_SOURCE_COMMENT_SUFFIX);
 
         if is_debug_enabled() {
             eprintln!("Line {}: '{}' - is_comment: {}", cursor_line, line, is_on_comment);
@@ -531,7 +541,7 @@ fn locate_mermaid_source_block(
     // Check if this block is already rendered (has source file comment before it)
     if start_line > 0 {
         let prev_line = lines[start_line - 1].trim();
-        if prev_line.starts_with("<!-- mermaid-source-file:") {
+        if prev_line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) {
             return None;
         }
     }
@@ -604,7 +614,7 @@ fn locate_rendered_mermaid_block(
         let search_start = cursor_line.saturating_sub(10);
         let backward_result = (search_start..=cursor_line).rev().find(|&i| {
             let line = lines[i].trim();
-            let is_comment = line.starts_with("<!-- mermaid-source-file:") && line.ends_with("-->");
+            let is_comment = line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) && line.ends_with(MERMAID_SOURCE_COMMENT_SUFFIX);
             if is_comment && is_debug_enabled() {
                 eprintln!("Found mermaid comment (backward) at line {}: {}", i, line);
             }
@@ -618,7 +628,7 @@ fn locate_rendered_mermaid_block(
             let search_end = (cursor_line + 5).min(lines.len() - 1);
             let forward_result = (cursor_line..=search_end).find(|&i| {
                 let line = lines[i].trim();
-                let is_comment = line.starts_with("<!-- mermaid-source-file:") && line.ends_with("-->");
+                let is_comment = line.starts_with(MERMAID_SOURCE_COMMENT_PREFIX) && line.ends_with(MERMAID_SOURCE_COMMENT_SUFFIX);
                 if is_comment && is_debug_enabled() {
                     eprintln!("Found mermaid comment (forward) at line {}: {}", i, line);
                 }
@@ -631,7 +641,7 @@ fn locate_rendered_mermaid_block(
 
     // Extract the source file path
     let line = lines[source_line].trim();
-    let file_start = "<!-- mermaid-source-file:".len();
+    let file_start = MERMAID_SOURCE_COMMENT_PREFIX.len();
     let file_end = line.len() - "-->".len();
     let source_file_path = &line[file_start..file_end].trim();
 
@@ -780,10 +790,10 @@ fn create_render_edits(
         .to_file_path()
         .map_err(|_| anyhow::anyhow!("Invalid file path"))?;
 
-    // Create .mermaid directory in the document's parent directory
+    // Create mermaid media directory in the document's parent directory
     // SECURITY: Validate path stays within project boundaries
     let media_dir = if let Some(parent) = path.parent() {
-        let media_dir = parent.join(".mermaid");
+        let media_dir = parent.join(MERMAID_MEDIA_DIR);
 
         // SECURITY: Ensure the resolved path stays within the parent directory
         match media_dir.canonicalize() {
@@ -812,15 +822,15 @@ fn create_render_edits(
 
         media_dir
     } else {
-        Path::new(".mermaid").to_path_buf()
+        Path::new(MERMAID_MEDIA_DIR).to_path_buf()
     };
 
-    // Ensure the .mermaid directory exists
+    // Ensure the mermaid media directory exists
     fs::create_dir_all(&media_dir)
-        .map_err(|e| anyhow!("Failed to create .mermaid directory: {}", e))?;
+        .map_err(|e| anyhow!("Failed to create mermaid media directory: {}", e))?;
 
     // Create cache directory
-    let cache_dir = media_dir.join(".cache");
+    let cache_dir = media_dir.join(MERMAID_CACHE_DIR);
     fs::create_dir_all(&cache_dir)
         .map_err(|e| anyhow!("Failed to create cache directory: {}", e))?;
 
@@ -877,7 +887,7 @@ fn create_render_edits(
         let base_name = path.file_stem()
             .unwrap_or_default()
             .to_string_lossy();
-        let source_filename = format!("{}_{}.mmd", base_name, unique_id);
+        let source_filename = format!("{}_{}{}", base_name, unique_id, MERMAID_FILE_EXTENSION);
         media_dir.join(source_filename)
     };
 
@@ -885,18 +895,19 @@ fn create_render_edits(
     fs::write(&source_file_path, &block.code)
         .map_err(|e| anyhow!("Failed to write source file: {}", e))?;
 
-    // Calculate relative paths from the markdown file to .mermaid directory
+    // Calculate relative paths from the markdown file to mermaid media directory
     let source_relative = source_file_path
         .strip_prefix(&path.parent().unwrap_or_else(|| Path::new(".")))
         .unwrap_or(&source_file_path)
         .to_string_lossy();
 
-    let svg_path_buf = Path::new(".mermaid").join(&svg_filename);
+    let svg_path_buf = Path::new(MERMAID_MEDIA_DIR).join(&svg_filename);
     let svg_relative = svg_path_buf.to_string_lossy();
 
     let mut new_text = format!(
-        "<!-- mermaid-source-file:{}-->\n\n![Mermaid Diagram]({})\n",
-        source_relative.trim(), svg_relative
+        "{}{}{}\n\n![Mermaid Diagram]({})\n",
+        MERMAID_SOURCE_COMMENT_PREFIX, source_relative, MERMAID_SOURCE_COMMENT_SUFFIX,
+        svg_relative
     );
 
     if is_debug_enabled() {
@@ -967,7 +978,7 @@ fn count_mermaid_blocks(content: &str) -> usize {
     while i < lines.len() {
         if let Some((start, end)) = find_mermaid_fence(&lines, i) {
             // Check if it's already rendered
-            if start == 0 || !lines[start - 1].starts_with("<!-- mermaid-source-file:") {
+            if start == 0 || !lines[start - 1].starts_with(MERMAID_SOURCE_COMMENT_PREFIX) {
                 count += 1;
             }
             i = end + 1;
@@ -987,7 +998,7 @@ fn render_all_diagrams_content(uri: &str, content: &str) -> Result<HashMap<Url, 
     while i < lines.len() {
         if let Some((start, end)) = find_mermaid_fence(&lines, i) {
             // Skip if already rendered
-            if start == 0 || !lines[start - 1].starts_with("<!-- mermaid-source-file:") {
+            if start == 0 || !lines[start - 1].starts_with(MERMAID_SOURCE_COMMENT_PREFIX) {
                 let code = lines[start + 1..end].join("\n");
 
                 let block = MermaidSourceBlock {
@@ -1119,22 +1130,4 @@ fn execute_command(
         }
         _ => Err(anyhow::anyhow!("Unknown command: {}", params.command)),
     }
-}
-
-fn render_all_diagrams(
-    params: &TextDocumentIdentifier,
-    documents: &HashMap<String, String>,
-) -> Result<WorkspaceEdit> {
-    let uri = params.uri.to_string();
-    let content = documents
-        .get(&uri)
-        .ok_or_else(|| anyhow::anyhow!("Document not found: {}", uri))?;
-
-    let changes = render_all_diagrams_content(&uri, content)?;
-
-    Ok(WorkspaceEdit {
-        changes: Some(changes),
-        document_changes: None,
-        change_annotations: None,
-    })
 }
