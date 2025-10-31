@@ -35,13 +35,13 @@ pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
         .map(PathBuf::from)
         .unwrap_or(default_config_path);
 
-    let output = run_mermaid_cli(&cli_path, &input_path, &output_path, &config_path, false)?;
+    let output = run_mermaid_cli(&cli_path, &input_path, &output_path, &config_path, true)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if stderr.contains("unknown option '--disableHtmlLabels'") {
             let fallback =
-                run_mermaid_cli(&cli_path, &input_path, &output_path, &config_path, false)?;
+                run_mermaid_cli(&cli_path, &input_path, &output_path, &config_path, true)?;
             if !fallback.status.success() {
                 let stderr = String::from_utf8_lossy(&fallback.stderr);
                 return Err(anyhow!("Mermaid CLI error: {}", stderr.trim()));
