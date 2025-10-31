@@ -779,7 +779,7 @@ fn find_mermaid_fence(lines: &[&str], cursor_line: usize) -> Option<(usize, usiz
 /// Clean up old diagram files that are no longer referenced in the document
 /// Keeps cache files (.cache/*.svg) but removes unreferenced output files
 fn cleanup_old_diagram_files(_uri: &str, content: &str, media_dir: &Path) -> Result<()> {
-    debug!("Cleaning up old diagram files in {:?}", media_dir);
+    info!("=== CLEANUP: Cleaning up old diagram files in {:?}", media_dir);
 
     // Find all currently referenced files in the document
     let mut referenced_files = std::collections::HashSet::new();
@@ -806,7 +806,10 @@ fn cleanup_old_diagram_files(_uri: &str, content: &str, media_dir: &Path) -> Res
         }
     }
 
-    debug!("Found {} referenced files in document", referenced_files.len());
+    info!("CLEANUP: Found {} referenced files in document", referenced_files.len());
+    for ref_file in &referenced_files {
+        info!("CLEANUP: Referenced: {}", ref_file);
+    }
 
     // Scan the media directory for orphaned files
     if let Ok(entries) = std::fs::read_dir(media_dir) {
@@ -833,10 +836,12 @@ fn cleanup_old_diagram_files(_uri: &str, content: &str, media_dir: &Path) -> Res
 
             if !referenced_files.contains(file_name.as_ref()) &&
                !referenced_files.contains(&relative_path) {
-                debug!("Removing unreferenced file: {:?}", path);
+                info!("CLEANUP: Removing unreferenced file: {:?}", path);
                 if let Err(e) = std::fs::remove_file(&path) {
-                    warn!("Failed to remove old file {:?}: {}", path, e);
+                    warn!("CLEANUP: Failed to remove old file {:?}: {}", path, e);
                 }
+            } else {
+                info!("CLEANUP: Keeping referenced file: {:?}", path);
             }
         }
     }
@@ -1154,12 +1159,14 @@ fn render_all_diagrams_content(
 ) -> Result<HashMap<Url, Vec<TextEdit>>> {
     let lines: Vec<&str> = content.lines().collect();
     let mut all_edits: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    let mut rendered_any = false;  // Track if we actually rendered anything
     let mut i = 0;
 
     while i < lines.len() {
         if let Some((start, end)) = find_mermaid_fence(&lines, i) {
             // Skip if already rendered
             if start == 0 || !lines[start - 1].starts_with(MERMAID_SOURCE_COMMENT_PREFIX) {
+                rendered_any = true;  // Mark that we're rendering something
                 let code = lines[start + 1..end].join("\n");
 
                 let block = MermaidSourceBlock {
@@ -1211,16 +1218,14 @@ fn render_all_diagrams_content(
         }
     }
 
-    // Clean up old unreferenced files after rendering
-    if let Ok(url) = Url::parse(uri) {
-        if let Ok(path) = url.to_file_path() {
-            if let Some(parent) = path.parent() {
-                let media_dir = parent.join(MERMAID_MEDIA_DIR);
-                if media_dir.exists() {
-                    let _ = cleanup_old_diagram_files(uri, content, &media_dir);
-                }
-            }
-        }
+    // IMPORTANT: Do NOT run cleanup here!
+    // When called from CodeAction pre-computation, the edits haven't been applied yet,
+    // so cleanup sees the old content and deletes all the newly created SVG files.
+    // Cleanup should only run during actual command execution when we have the updated content.
+    if rendered_any {
+        info!("Rendered new diagrams, but skipping cleanup (not safe during pre-computation)");
+    } else {
+        info!("No new diagrams rendered (all already rendered), skipping cleanup");
     }
 
     Ok(all_edits)
