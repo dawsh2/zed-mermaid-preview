@@ -9,6 +9,15 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use html_escape;
 
+// Precompiled regex patterns to avoid DoS and improve performance
+static FOREIGN_OBJECT_REGEX: Lazy<Regex> = Lazy::new(|| {
+    // More efficient pattern that prevents catastrophic backtracking:
+    // - Use [^<]+ instead of .*? to match content (stops at first <)
+    // - Atomic grouping behavior by being more specific
+    Regex::new(r#"<foreignObject\s+[^>]+>([^<]+(?:<(?!/foreignObject>)[^<]*)*)</foreignObject>"#)
+        .expect("Foreign object regex should compile")
+});
+
 /// Render Mermaid code to SVG using mmdc and sanitize the output.
 pub fn render_mermaid(mermaid_code: &str) -> Result<String> {
     if mermaid_code.trim().is_empty() {
@@ -78,13 +87,10 @@ fn sanitize_svg(svg: &str) -> Result<String> {
 }
 
 fn convert_foreign_objects_to_text(svg: &str) -> Result<String> {
-    let foreign_object_regex = Regex::new(r#"<foreignObject[^>]*>(.*?)</foreignObject>"#)
-        .map_err(|e| anyhow!("Failed to compile foreignObject regex: {}", e))?;
-
     let mut result = svg.to_string();
 
-    // Process each foreignObject
-    while let Some(caps) = foreign_object_regex.captures(&result) {
+    // Process each foreignObject using precompiled regex
+    while let Some(caps) = FOREIGN_OBJECT_REGEX.captures(&result) {
         let full_match = caps.get(0).unwrap().as_str();
         let content = caps.get(1).unwrap().as_str();
 
