@@ -45,10 +45,20 @@ impl MermaidPreviewExtension {
         language_server_id: &LanguageServerId,
     ) -> Result<String> {
         // Check for explicit local development path first
-        if let Ok(path) = env::var("MERMAID_LSP_PATH") {
-            let candidate = PathBuf::from(path);
-            if candidate.is_file() {
-                return Self::finalize_path(language_server_id, candidate, &mut self.lsp_path);
+        eprintln!("=== get_lsp_path called ===");
+        match env::var("MERMAID_LSP_PATH") {
+            Ok(path) => {
+                eprintln!("✅ MERMAID_LSP_PATH is set: {}", path);
+                let candidate = PathBuf::from(&path);
+                if candidate.is_file() {
+                    eprintln!("✅ File exists, using local build!");
+                    return Self::finalize_path(language_server_id, candidate, &mut self.lsp_path);
+                } else {
+                    eprintln!("❌ File does not exist at: {}", path);
+                }
+            }
+            Err(_) => {
+                eprintln!("❌ MERMAID_LSP_PATH not set, will download from GitHub");
             }
         }
 
@@ -69,14 +79,24 @@ impl MermaidPreviewExtension {
         let extension_dir = env::current_dir()
             .map_err(|error| format!("unable to determine extension directory: {error}"))?;
 
+        eprintln!("Extension working directory: {:?}", extension_dir);
+
         // Check for bundled/local binary first (no download required)
         if let Some(path) = Self::candidate_paths(&extension_dir, lsp_binary_name)
             .into_iter()
-            .find(|candidate| candidate.is_file())
+            .find(|candidate| {
+                let exists = candidate.is_file();
+                if exists {
+                    eprintln!("Found candidate binary: {}", candidate.display());
+                }
+                exists
+            })
         {
             eprintln!("✅ Using bundled LSP binary: {}", path.display());
             return Self::finalize_path(language_server_id, path, &mut self.lsp_path);
         }
+
+        eprintln!("No bundled binary found, will download from GitHub");
 
         // If no local binary found, try to download from GitHub
         match self.download_lsp(language_server_id, &extension_dir, lsp_binary_name) {

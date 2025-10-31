@@ -412,36 +412,53 @@ fn get_code_actions(
         });
     }
 
-    // Edit Mermaid action - this is cheap, just reading from file
+    // Edit Mermaid action - only show when cursor is ON the HTML comment line
+    // This prevents confusion when cursor is on the image line
     if is_debug_enabled() {
-        eprintln!("Checking for rendered mermaid block...");
+        eprintln!("Checking if cursor is on a mermaid comment line...");
     }
-    if let Some(block) = locate_rendered_mermaid_block(content, &uri, &cursor) {
-        if is_debug_enabled() {
-            eprintln!("Found rendered mermaid block, adding Edit action!");
-        }
-        let edit = WorkspaceEdit {
-            changes: Some(create_source_edits(&uri, &block)?),
-            document_changes: None,
-            change_annotations: None,
-        };
 
-        actions.insert(
-            0,
-            CodeAction {
-                title: "Edit Mermaid Source".to_string(),
-                kind: Some(CodeActionKind::REFACTOR_REWRITE),
-                diagnostics: None,
-                edit: Some(edit),
-                command: None,
-                is_preferred: Some(true),
-                disabled: None,
-                data: None,
-            },
-        );
-    } else {
+    let lines: Vec<&str> = content.lines().collect();
+    let cursor_line = cursor.line.min((lines.len() - 1) as u32) as usize;
+
+    if cursor_line < lines.len() {
+        let line = lines[cursor_line].trim();
+        let is_on_comment = line.starts_with("<!-- mermaid-source-file:") && line.ends_with("-->");
+
         if is_debug_enabled() {
-            eprintln!("No rendered mermaid block found for editing");
+            eprintln!("Line {}: '{}' - is_comment: {}", cursor_line, line, is_on_comment);
+        }
+
+        if is_on_comment {
+            // Now find the rendered block for this comment
+            if let Some(block) = locate_rendered_mermaid_block(content, &uri, &cursor) {
+                if is_debug_enabled() {
+                    eprintln!("Found rendered mermaid block, adding Edit action!");
+                }
+                let edit = WorkspaceEdit {
+                    changes: Some(create_source_edits(&uri, &block)?),
+                    document_changes: None,
+                    change_annotations: None,
+                };
+
+                actions.insert(
+                    0,
+                    CodeAction {
+                        title: "Edit Mermaid Source".to_string(),
+                        kind: Some(CodeActionKind::REFACTOR_REWRITE),
+                        diagnostics: None,
+                        edit: Some(edit),
+                        command: None,
+                        is_preferred: Some(true),
+                        disabled: None,
+                        data: None,
+                    },
+                );
+            }
+        } else {
+            if is_debug_enabled() {
+                eprintln!("Cursor not on mermaid comment line, skipping Edit action");
+            }
         }
     }
 
@@ -575,33 +592,42 @@ fn locate_rendered_mermaid_block(
         eprintln!("Cursor line: {}, total lines: {}", cursor_line, lines.len());
     }
 
-    // Find comment with mermaid source file reference - expand search range
-    let search_start = cursor_line.saturating_sub(10);
-    let search_end = (cursor_line + 5).min(lines.len() - 1);
+    // Find comment with mermaid source file reference
+    // Search BACKWARDS from cursor first (most common: cursor on image line after comment)
+    // Then search forward if not found
     if is_debug_enabled() {
-        eprintln!("Searching for mermaid comment in lines {}-{}", search_start, search_end);
+        eprintln!("Searching for mermaid comment near cursor line {}", cursor_line);
     }
 
-    // Debug: print lines in search range
-    if is_debug_enabled() {
-        for i in search_start..=search_end {
-            if i < lines.len() {
-                eprintln!("Line {}: '{}'", i, lines[i]);
-            }
-        }
-    }
-
-    let source_line = (search_start..=search_end)
-        .find(|&i| {
+    let source_line = {
+        // First, search backwards from cursor (up to 10 lines)
+        let search_start = cursor_line.saturating_sub(10);
+        let backward_result = (search_start..=cursor_line).rev().find(|&i| {
             let line = lines[i].trim();
             let is_comment = line.starts_with("<!-- mermaid-source-file:") && line.ends_with("-->");
-            if is_comment {
-                if is_debug_enabled() {
-                    eprintln!("Found mermaid comment at line {}: {}", i, line);
-                }
+            if is_comment && is_debug_enabled() {
+                eprintln!("Found mermaid comment (backward) at line {}: {}", i, line);
             }
             is_comment
-        })?;
+        });
+
+        if let Some(line) = backward_result {
+            line
+        } else {
+            // If not found backward, search forward (up to 5 lines)
+            let search_end = (cursor_line + 5).min(lines.len() - 1);
+            let forward_result = (cursor_line..=search_end).find(|&i| {
+                let line = lines[i].trim();
+                let is_comment = line.starts_with("<!-- mermaid-source-file:") && line.ends_with("-->");
+                if is_comment && is_debug_enabled() {
+                    eprintln!("Found mermaid comment (forward) at line {}: {}", i, line);
+                }
+                is_comment
+            });
+
+            forward_result?
+        }
+    };
 
     // Extract the source file path
     let line = lines[source_line].trim();
@@ -682,10 +708,19 @@ fn locate_rendered_mermaid_block(
         img_line += 1;
     }
 
-    // Find the end of the block (after the image)
+    // Find the end of the block (after the image and any trailing blank lines)
     let end_line = if img_line < lines.len() && lines[img_line].contains("![Mermaid Diagram](") {
-        // Include the comment line and image line and one blank line after
-        img_line + 2
+        // Start after the image line
+        let mut end = img_line + 1;
+
+        // Skip ONE blank line if present (common formatting)
+        if end < lines.len() && lines[end].trim().is_empty() {
+            end += 1;
+        }
+
+        // But stop if we hit another diagram or content
+        // Don't consume the next diagram's comment or headers
+        end
     } else {
         source_line + 2
     };

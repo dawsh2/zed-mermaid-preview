@@ -30,20 +30,26 @@ cargo build --lib --target wasm32-wasip2 --release
 echo "Building LSP server..."
 cargo build --package mermaid-lsp --release
 
-# Copy the binaries to the root directory for easy installation
-echo "Copying binaries to root directory..."
-cp target/wasm32-wasip2/release/mermaid_preview.wasm "$SCRIPT_DIR/extension.wasm"
-cp lsp/target/release/mermaid-lsp "$SCRIPT_DIR/"
+# Copy the WASM to root directory
+echo "Copying extension.wasm to root directory..."
+cp target/wasm32-wasip2/release/mermaid_preview.wasm "$SCRIPT_DIR/../extension.wasm"
 
-echo "Build complete!"
+# Copy LSP binary to root (not committed to git, but useful for local install)
+cp target/release/mermaid-lsp "$SCRIPT_DIR/../mermaid-lsp"
+
 echo ""
-echo "🚀 Extension is now ready with bundled LSP binary"
-echo "No downloads required on first use!"
+echo "✅ Build complete!"
 echo ""
-echo "To install:"
-echo "1. Run ./install.sh or copy this directory into your Zed extensions folder"
-echo "2. Restart Zed"
+echo "📦 Binaries built:"
+echo "  - target/wasm32-wasip2/release/mermaid_preview.wasm → extension.wasm"
+echo "  - target/release/mermaid-lsp → mermaid-lsp (~3.5MB)"
 echo ""
-echo "Files created:"
-echo "- extension.wasm (WebAssembly extension)"
-echo "- mermaid-lsp (Bundled LSP server binary - ~3.5MB)"
+echo "🔧 For development:"
+echo "  Set MERMAID_LSP_PATH to use your local build:"
+echo "  export MERMAID_LSP_PATH=\"$(realpath "$SCRIPT_DIR/../target/release/mermaid-lsp")\""
+echo ""
+echo "  Or run: ./scripts/dev-setup.sh (one-time setup)"
+echo ""
+echo "📦 For production users:"
+echo "  Extension auto-downloads versioned binary from GitHub releases"
+echo "  No manual installation needed!"

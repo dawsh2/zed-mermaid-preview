@@ -2,5 +2,21 @@
   "htmlLabels": false,
   "theme": "default",
   "backgroundColor": "white",
-  "fontFamily": "Arial, sans-serif"
+  "fontFamily": "Arial, sans-serif",
+  "flowchart": { "htmlLabels": false },
+  "sequence": { "htmlLabels": false },
+  "class": { "htmlLabels": false },
+  "classDiagram": { "htmlLabels": false },
+  "state": { "htmlLabels": false },
+  "gantt": { "htmlLabels": false },
+  "journey": { "htmlLabels": false },
+  "er": { "htmlLabels": false },
+  "pie": { "htmlLabels": false },
+  "requirement": { "htmlLabels": false },
+  "gitGraph": { "htmlLabels": false },
+  "c4": { "htmlLabels": false },
+  "mindmap": { "htmlLabels": false },
+  "timeline": { "htmlLabels": false },
+  "quadrantChart": { "htmlLabels": false },
+  "sankey": { "htmlLabels": false }
 }

@@ -91,32 +91,46 @@ fn convert_foreign_objects_to_text(svg: &str) -> Result<String> {
         // Extract text from HTML content
         let text = extract_text_from_html(content);
 
-        // Extract positioning and sizing attributes from foreignObject tag
-        let x = extract_attr(full_match, "x").unwrap_or("0".to_string());
-        let y = extract_attr(full_match, "y").unwrap_or("0".to_string());
-        let width = extract_attr(full_match, "width").unwrap_or("0".to_string());
-        let height = extract_attr(full_match, "height").unwrap_or("0".to_string());
-
-        // Calculate center point of the foreignObject
-        let x_val = x.parse::<f64>().unwrap_or(0.0);
-        let y_val = y.parse::<f64>().unwrap_or(0.0);
-        let width_val = width.parse::<f64>().unwrap_or(0.0);
-        let height_val = height.parse::<f64>().unwrap_or(0.0);
-
-        let center_x = x_val + width_val / 2.0;
-        let center_y = y_val + height_val / 2.0;
-
         // Skip empty or zero-size foreignObjects (these are often edge labels without content)
-        if width_val <= 0.0 || height_val <= 0.0 || text.trim().is_empty() {
+        if text.trim().is_empty() {
             result = result.replace(full_match, "");
             continue;
         }
 
-        // Create a text element to replace foreignObject with proper centering
-        let text_element = format!(
-            "<text x=\"{:.2}\" y=\"{:.2}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"Arial, sans-serif\" font-size=\"14\" fill=\"#333\">{}</text>",
-            center_x, center_y, text
-        );
+        // Try to extract transform attribute first (used in class diagrams)
+        let text_element = if let Some(transform) = extract_attr(full_match, "transform") {
+            // Class diagrams use transform="translate(x, y)" for positioning
+            // Preserve the transform to maintain correct positioning
+            format!(
+                "<text transform=\"{}\" text-anchor=\"start\" dominant-baseline=\"hanging\" font-family=\"Arial, sans-serif\" font-size=\"14\" fill=\"#333\">{}</text>",
+                transform, text
+            )
+        } else {
+            // Fallback to x/y attributes with centering (for simple diagrams)
+            let x = extract_attr(full_match, "x").unwrap_or("0".to_string());
+            let y = extract_attr(full_match, "y").unwrap_or("0".to_string());
+            let width = extract_attr(full_match, "width").unwrap_or("0".to_string());
+            let height = extract_attr(full_match, "height").unwrap_or("0".to_string());
+
+            let x_val = x.parse::<f64>().unwrap_or(0.0);
+            let y_val = y.parse::<f64>().unwrap_or(0.0);
+            let width_val = width.parse::<f64>().unwrap_or(0.0);
+            let height_val = height.parse::<f64>().unwrap_or(0.0);
+
+            // Skip zero-size elements
+            if width_val <= 0.0 || height_val <= 0.0 {
+                result = result.replace(full_match, "");
+                continue;
+            }
+
+            let center_x = x_val + width_val / 2.0;
+            let center_y = y_val + height_val / 2.0;
+
+            format!(
+                "<text x=\"{:.2}\" y=\"{:.2}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-family=\"Arial, sans-serif\" font-size=\"14\" fill=\"#333\">{}</text>",
+                center_x, center_y, text
+            )
+        };
 
         result = result.replace(full_match, &text_element);
     }
