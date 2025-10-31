@@ -44,7 +44,6 @@ flowchart TD
     A[Start] --> B[Process]
     B --> C[End]
 ```
-```
 Place cursor in block → Right-click → **"Render Mermaid Diagram"**
 
 ### Multiple Diagrams
