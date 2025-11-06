@@ -1,13 +1,13 @@
 use anyhow::{anyhow, Result};
+use html_escape;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::{
     env, fs,
     path::PathBuf,
     process::{Command, Stdio},
 };
 use tempfile::tempdir;
-use once_cell::sync::Lazy;
-use regex::Regex;
-use html_escape;
 
 // Precompiled regex patterns to avoid DoS and improve performance
 static FOREIGN_OBJECT_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -173,8 +173,7 @@ fn extract_text_from_html(html: &str) -> String {
 }
 
 fn extract_attr(tag: &str, attr: &str) -> Option<String> {
-    let attr_regex = Regex::new(&format!(r#"{}="([^"]*)""#, regex::escape(attr)))
-        .ok()?;
+    let attr_regex = Regex::new(&format!(r#"{}="([^"]*)""#, regex::escape(attr))).ok()?;
     attr_regex.captures(tag).map(|c| c[1].to_string())
 }
 
@@ -210,9 +209,8 @@ static JAVASCRIPT_HREF_ATTR: Lazy<Regex> = Lazy::new(|| {
         .expect("valid regex for javascript href attributes")
 });
 
-static HTML_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"<[^>]*>").expect("valid regex for HTML tags")
-});
+static HTML_TAG_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"<[^>]*>").expect("valid regex for HTML tags"));
 
 #[cfg(test)]
 mod tests {
@@ -235,7 +233,10 @@ mod tests {
         ];
 
         for svg in test_cases {
-            assert!(sanitize_svg(svg).is_err(), "Should reject case-insensitive script tags");
+            assert!(
+                sanitize_svg(svg).is_err(),
+                "Should reject case-insensitive script tags"
+            );
         }
     }
 
@@ -331,7 +332,7 @@ mod tests {
         assert!(!sanitized.contains("onclick=\"alert('xss')\""));
         assert!(!sanitized.contains("alert('xss')\""));
         assert!(!sanitized.contains("…")); // ellipsis from truncation
-        // Should be well-formed
+                                           // Should be well-formed
         assert!(sanitized.contains("<rect"));
         assert!(sanitized.contains("width=\"10\""));
         assert!(sanitized.ends_with("</svg>"));
