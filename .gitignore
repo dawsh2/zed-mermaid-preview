@@ -33,3 +33,4 @@ test_*.mmd
 .mermaid/
 *.mmd
 *.svg
+.code/
