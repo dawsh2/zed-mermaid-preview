@@ -5,6 +5,14 @@ version = "0.1.24"
 schema_version = 1
 authors = ["Mermaid Preview Maintainers"]
 repository = "https://github.com/dawsh2/zed-mermaid-preview"
+languages = ["languages/mermaid"]
+themes = []
+icon_themes = []
+capabilities = []
+
+[lib]
+kind = "Rust"
+version = "0.7.0"
 
 [compatibility]
 zed = "0.210.0"
@@ -17,3 +25,7 @@ languages = ["Markdown", "Mermaid"]
 [language_servers.mermaid.language_ids]
 "Markdown" = "markdown"
 "Mermaid" = "mermaid"
+
+[grammars.mermaid]
+repository = "https://github.com/monaqa/tree-sitter-mermaid"
+rev = "90ae195b31933ceb9d079abfa8a3ad0a36fee4cc"

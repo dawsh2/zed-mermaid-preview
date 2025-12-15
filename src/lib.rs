@@ -39,11 +39,32 @@ impl zed::Extension for MermaidPreviewExtension {
 
         let lsp_path = self.get_lsp_path(worktree, language_server_id)?;
 
+        // Derive extension work directory from LSP path
+        // LSP path: .../work/mermaid-preview/mermaid-lsp-cache/v.../mermaid-lsp
+        // We want:  .../work/mermaid-preview/node_modules/.bin/mmdc
+        let mut env = Vec::new();
+        if let Some(lsp_cache_dir) = PathBuf::from(&lsp_path).parent() {
+            if let Some(version_dir) = lsp_cache_dir.parent() {
+                if let Some(extension_work_dir) = version_dir.parent() {
+                    let mmdc_path = extension_work_dir.join("node_modules/.bin/mmdc");
+                    if mmdc_path.exists() {
+                        env.push((
+                            "MMDC_PATH".to_string(),
+                            mmdc_path.to_string_lossy().to_string(),
+                        ));
+                        eprintln!("✅ Setting MMDC_PATH={}", mmdc_path.display());
+                    } else {
+                        eprintln!("⚠️  mmdc not found at {}", mmdc_path.display());
+                    }
+                }
+            }
+        }
+
         eprintln!("Starting Mermaid LSP at: {}", lsp_path);
         Ok(zed::Command {
             command: lsp_path,
             args: vec![],
-            env: Default::default(),
+            env,
         })
     }
 }
@@ -59,18 +80,28 @@ impl MermaidPreviewExtension {
             eprintln!("Diagram rendering may fail until @mermaid-js/mermaid-cli is installed manually");
         }
 
-        // Create a dummy language_server_id for initialization
-        let dummy_id = LanguageServerId::from("mermaid");
-
-        // Use current directory as extension directory
+        // Pre-download LSP binary
         let current_dir = env::current_dir()
             .map_err(|e| format!("Failed to get current directory: {}", e))?;
 
-        // Try to find or download the binary
-        match self.get_lsp_path_impl(&dummy_id, &current_dir) {
+        // Try to find or download the binary directly
+        let lsp_binary_name = Self::lsp_binary_name();
+
+        // Check for local binary first
+        if let Some(path) = Self::candidate_paths(&current_dir, lsp_binary_name)
+            .into_iter()
+            .find(|candidate| candidate.is_file())
+        {
+            eprintln!("✅ Mermaid LSP binary initialized: {}", path.display());
+            self.lsp_path = Some(path.to_string_lossy().to_string());
+            return Ok(());
+        }
+
+        // Download from GitHub if not found locally
+        match self.download_lsp_preload(&current_dir, lsp_binary_name) {
             Ok(path) => {
-                eprintln!("✅ Mermaid LSP binary initialized: {}", path);
-                self.lsp_path = Some(path);
+                eprintln!("✅ Mermaid LSP binary initialized: {}", path.display());
+                self.lsp_path = Some(path.to_string_lossy().to_string());
                 Ok(())
             }
             Err(e) => {
@@ -87,7 +118,8 @@ impl MermaidPreviewExtension {
         // Check if mmdc is already available
         if let Ok(path) = Command::new("which").arg("mmdc").output() {
             if path.status.success() {
-                let path_str = String::from_utf8_lossy(&path.stdout).trim();
+                let path_str = String::from_utf8_lossy(&path.stdout);
+                let path_str = path_str.trim();
                 eprintln!("✅ Mermaid CLI found at: {}", path_str);
                 return Ok(());
             }
@@ -120,39 +152,20 @@ impl MermaidPreviewExtension {
         }
     }
 
-    /// Install Mermaid CLI using npm
+    /// Install Mermaid CLI using Zed's npm
     fn install_mermaid_cli(&self) -> Result<()> {
         eprintln!("Installing @mermaid-js/mermaid-cli globally...");
 
-        // Check if npm is available
-        if let Ok(output) = Command::new("which").arg("npm").output() {
-            if output.status.success() {
-                let npm_path = String::from_utf8_lossy(&output.stdout).trim();
-                eprintln!("Found npm at: {}", npm_path);
-            } else {
-                return Err("npm not found. Please install Node.js and npm first.".to_string());
-            }
-        } else {
-            return Err("npm not found. Please install Node.js and npm first.".to_string());
-        }
+        // Get latest version
+        let version = zed::npm_package_latest_version("@mermaid-js/mermaid-cli")
+            .map_err(|e| format!("Failed to get latest version: {}", e))?;
 
-        // Run npm install globally
-        let output = Command::new("npm")
-            .args(["install", "-g", "@mermaid-js/mermaid-cli"])
-            .output()
-            .map_err(|e| format!("Failed to run npm install: {}", e))?;
+        // Install package using Zed's npm
+        zed::npm_install_package("@mermaid-js/mermaid-cli", &version)
+            .map_err(|e| format!("Failed to install package: {}", e))?;
 
-        if output.status.success() {
-            eprintln!("npm install completed successfully");
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            Err(format!(
-                "npm install failed. Status: {}. Stdout: {}. Stderr: {}",
-                output.status, stdout, stderr
-            ))
-        }
+        eprintln!("npm install completed successfully");
+        Ok(())
     }
 
     fn get_lsp_path(
@@ -166,9 +179,9 @@ impl MermaidPreviewExtension {
         }
 
         // Otherwise, try to get it now (fallback for first file open)
-        let worktree_path = worktree.path()
-            .map_err(|e| format!("Failed to get worktree path: {}", e))?;
-        self.get_lsp_path_impl(language_server_id, &worktree_path)
+        let worktree_path = worktree.root_path();
+        let path = std::path::Path::new(&worktree_path);
+        self.get_lsp_path_impl(language_server_id, path)
     }
 
     fn get_lsp_path_impl(
@@ -197,7 +210,8 @@ impl MermaidPreviewExtension {
         // For development, check local PATH before GitHub releases
         if let Ok(output) = Command::new("which").arg("mermaid-lsp").output() {
             if output.status.success() {
-                let path_str = String::from_utf8_lossy(&output.stdout).trim();
+                let path_str = String::from_utf8_lossy(&output.stdout);
+                let path_str = path_str.trim();
                 return Self::finalize_path(
                     language_server_id,
                     PathBuf::from(path_str),
@@ -240,7 +254,7 @@ impl MermaidPreviewExtension {
             _ => {}
         }
 
-  
+
         let search_locations = Self::candidate_paths(&extension_dir, lsp_binary_name)
             .into_iter()
             .map(|candidate| candidate.display().to_string())
@@ -333,7 +347,8 @@ impl MermaidPreviewExtension {
             {
                 Ok(output) => {
                     if output.status.success() {
-                        let version = String::from_utf8_lossy(&output.stdout).trim();
+                        let version = String::from_utf8_lossy(&output.stdout);
+                        let version = version.trim();
                         eprintln!("✅ Using existing LSP version: {} ({})", release.version, version);
                         zed::set_language_server_installation_status(
                             language_server_id,
@@ -358,7 +373,7 @@ impl MermaidPreviewExtension {
         fs::create_dir_all(&version_dir)
             .map_err(|err| format!("failed to create cache directory '{version_dir:?}': {err}"))?;
 
-        eprintln!("⬇️  Starting download of {} ({:.1}MB)...", asset.name, asset.size as f64 / 1024.0 / 1024.0);
+        eprintln!("⬇️  Starting download of {}...", asset.name);
         zed::set_language_server_installation_status(
             language_server_id,
             &zed::LanguageServerInstallationStatus::Downloading,
@@ -405,6 +420,77 @@ impl MermaidPreviewExtension {
 
         eprintln!("🎉 Mermaid LSP v{} successfully installed!", release.version);
         eprintln!("📍 Binary location: {}", binary_path.display());
+
+        Ok(binary_path)
+    }
+
+    /// Download LSP during preload (without LanguageServerId)
+    fn download_lsp_preload(
+        &mut self,
+        extension_dir: &Path,
+        binary_name: &str,
+    ) -> Result<PathBuf> {
+        eprintln!("🔍 Preloading Mermaid LSP...");
+
+        eprintln!("📡 Fetching latest release information...");
+        let release = zed::latest_github_release(
+            GITHUB_REPOSITORY,
+            zed::GithubReleaseOptions {
+                require_assets: true,
+                pre_release: false,
+            },
+        )?;
+
+        eprintln!("📦 Found latest release: v{}", release.version);
+        let asset = Self::match_asset(&release)?;
+        eprintln!("🎯 Matched platform asset: {}", asset.name);
+
+        let version_dir = extension_dir.join(CACHE_ROOT).join(&release.version);
+        let binary_path = version_dir.join(binary_name);
+
+        // Check if we already have the latest version
+        if binary_path.is_file() {
+            eprintln!("✅ LSP v{} already cached", release.version);
+            return Ok(binary_path);
+        }
+
+        eprintln!("📁 Creating cache directory: {}", version_dir.display());
+        fs::create_dir_all(&version_dir)
+            .map_err(|err| format!("failed to create cache directory '{version_dir:?}': {err}"))?;
+
+        eprintln!("⬇️  Starting download of {}...", asset.name);
+
+        let start_time = std::time::Instant::now();
+        zed::download_file(
+            &asset.download_url,
+            version_dir
+                .to_str()
+                .ok_or_else(|| "failed to stringify cache directory path".to_string())?,
+            DownloadedFileType::Zip,
+        )
+        .map_err(|err| format!("failed to download mermaid-lsp asset: {err}"))?;
+
+        let download_duration = start_time.elapsed();
+        eprintln!("✅ Download completed in {:.1}s", download_duration.as_secs_f64());
+
+        if !binary_path.is_file() {
+            return Err(format!(
+                "downloaded asset '{asset_name}' did not contain expected binary '{binary_name}'",
+                asset_name = asset.name
+            ));
+        }
+
+        eprintln!("🔧 Making binary executable...");
+        zed::make_file_executable(
+            binary_path
+                .to_str()
+                .ok_or_else(|| "failed to stringify downloaded binary path".to_string())?,
+        )?;
+
+        eprintln!("🧹 Cleaning up old cache versions...");
+        Self::purge_old_cache_versions(extension_dir, &release.version);
+
+        eprintln!("🎉 Mermaid LSP v{} preloaded successfully!", release.version);
 
         Ok(binary_path)
     }
